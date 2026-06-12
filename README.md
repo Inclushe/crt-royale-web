@@ -22,10 +22,11 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-Pick a shader (default `crt-royale`), choose an **input resolution** (the
-shaders are designed for retro console resolutions — NES/SNES 256px,
-Genesis 320×224, PS1 320×240; the upload is resampled to it), an aspect
-ratio and an output resolution (720p–4K), then upload a photo or video.
+Pick a shader (default `crt-royale`), choose an **input resolution** — retro
+console presets (NES/SNES 256px, Genesis 320×224, PS1 320×240), a downscale
+factor (2×/3×/4×/custom) relative to the upload's native size, or a fully
+custom WxH; the upload is resampled to it — plus an aspect ratio and an
+output resolution (720p–4K), then upload a photo or video.
 Shader parameters declared via `#pragma parameter` (e.g. crt-royale's
 geometry/AA settings) appear as sliders.
 

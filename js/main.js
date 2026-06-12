@@ -26,6 +26,7 @@ const ui = {
   preset: document.getElementById('preset'),
   resolution: document.getElementById('resolution'),
   inputRes: document.getElementById('inputRes'),
+  inputCustom: document.getElementById('inputCustom'),
   aspect: document.getElementById('aspect'),
   reload: document.getElementById('reload'),
   resetParams: document.getElementById('resetParams'),
@@ -143,11 +144,29 @@ async function loadPreset(presetPath) {
 
 function feedSize() {
   const v = ui.inputRes.value;
-  if (v === 'native' || !state.media) {
-    return state.media ? [state.media.width, state.media.height] : [320, 240];
+  const native = state.media ? [state.media.width, state.media.height] : [320, 240];
+  const byFactor = (f) => (f > 0
+    ? [Math.max(1, Math.round(native[0] / f)), Math.max(1, Math.round(native[1] / f))]
+    : native);
+  if (v === 'native' || !state.media) return native;
+  if (v.startsWith('/')) return byFactor(parseFloat(v.slice(1)));
+  if (v === 'custom-scale') return byFactor(parseFloat(ui.inputCustom.value));
+  if (v === 'custom-res') {
+    const m = ui.inputCustom.value.match(/^\s*(\d+)\s*[xX*,]\s*(\d+)\s*$/);
+    return m ? [Math.max(1, +m[1]), Math.max(1, +m[2])] : native;
   }
   const [w, h] = v.split('x').map(Number);
   return [w, h];
+}
+
+function updateInputCustomBox() {
+  const v = ui.inputRes.value;
+  const custom = v === 'custom-scale' || v === 'custom-res';
+  ui.inputCustom.style.display = custom ? '' : 'none';
+  if (custom) {
+    ui.inputCustom.placeholder = v === 'custom-scale' ? 'e.g. 2.5' : 'e.g. 320x240';
+    ui.inputCustom.focus();
+  }
 }
 
 function drawFeed() {
@@ -295,6 +314,10 @@ async function init() {
     ui.resolution.addEventListener('change', applyOutputSize);
     ui.aspect.addEventListener('change', applyOutputSize);
     ui.inputRes.addEventListener('change', () => {
+      updateInputCustomBox();
+      if (state.media) { applyFeed(); applyOutputSize(); }
+    });
+    ui.inputCustom.addEventListener('change', () => {
       if (state.media) { applyFeed(); applyOutputSize(); }
     });
     ui.flipY.addEventListener('change', () => {
