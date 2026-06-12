@@ -59,8 +59,9 @@ export class SlangCompiler {
       if (!linked) throw new Error(`${passName}: link: ` + this.lastError());
       handles.push(linked);
 
-      const wgsl = linked.getTargetCode(0);
+      let wgsl = linked.getTargetCode(0);
       if (!wgsl) throw new Error(`${passName}: codegen: ` + this.lastError());
+      wgsl = postprocessWgsl(wgsl);
 
       const layout = linked.getLayout(0);
       const reflection = layout ? layout.toJsonObject() : null;
@@ -73,6 +74,55 @@ export class SlangCompiler {
       try { session.delete(); } catch { /* ignore */ }
     }
   }
+}
+
+// Post-processing of Slang's *generated* WGSL (never the shader sources):
+//  1. Vertex and fragment GLSL entry points are both called "main"; Slang keeps
+//     the names, but WGSL forbids two functions with the same name.
+//  2. GLSL combined sampler2Ds are split into texture+sampler; the two halves
+//     (or unrelated resources) can land on the same @group/@binding slot,
+//     which WebGPU rejects. Reassign collisions to free slots.
+export function postprocessWgsl(wgsl) {
+  // -- unique entry point names --
+  const eps = [...wgsl.matchAll(/@(vertex|fragment)\s+fn\s+(\w+)\s*\(/g)];
+  const seen = new Map();
+  // process from the end so match indices stay valid while splicing
+  for (const m of eps.reverse()) {
+    const stage = m[1], name = m[2];
+    for (const other of eps) {
+      if (other !== m && other[2] === name) {
+        const newName = `${name}_${stage}`;
+        const defStart = m.index;
+        const def = m[0].replace(new RegExp(`fn\\s+${name}\\b`), `fn ${newName}`);
+        wgsl = wgsl.slice(0, defStart) + def + wgsl.slice(defStart + m[0].length);
+        break;
+      }
+    }
+    seen.set(stage, true);
+  }
+
+  // -- de-duplicate binding slots --
+  const declRe = /@binding\((\d+)\)\s*@group\((\d+)\)|@group\((\d+)\)\s*@binding\((\d+)\)/g;
+  const used = new Map(); // group -> Set(binding)
+  let result = '';
+  let last = 0;
+  let m2;
+  while ((m2 = declRe.exec(wgsl))) {
+    const group = +(m2[2] ?? m2[3]);
+    let binding = +(m2[1] ?? m2[4]);
+    if (!used.has(group)) used.set(group, new Set());
+    const set = used.get(group);
+    if (set.has(binding)) {
+      let free = 0;
+      while (set.has(free)) free++;
+      binding = free;
+    }
+    set.add(binding);
+    result += wgsl.slice(last, m2.index) + `@group(${group}) @binding(${binding})`;
+    last = m2.index + m2[0].length;
+  }
+  result += wgsl.slice(last);
+  return result;
 }
 
 // Loads the slang-wasm emscripten module. `wasmBinary` may be supplied for
