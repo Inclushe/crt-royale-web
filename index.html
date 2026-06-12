@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>libretro slang shaders on the web — crt-royale</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: sans-serif; margin: 0; background: #15161a; color: #ddd; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 8px 14px; background: #1e2026; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  header label { font-size: 13px; }
+  select, button, input[type=file] { font-size: 13px; background:#2a2d35; color:#ddd; border:1px solid #444; border-radius:4px; padding:4px 6px; }
+  #status { font-size: 12px; color: #9ad; padding: 4px 14px; min-height: 16px; white-space: pre-wrap; }
+  #content { display: flex; flex: 1; min-height: 0; }
+  #view { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; min-width: 0; }
+  canvas { max-width: 100%; max-height: 100%; image-rendering: auto; }
+  #params { width: 320px; overflow-y: auto; background: #1b1d22; padding: 8px; font-size: 12px; }
+  .param { margin-bottom: 6px; }
+  .param label { display: block; color: #aaa; }
+  .param input[type=range] { width: 70%; vertical-align: middle; }
+  .param .val { display:inline-block; width: 60px; text-align: right; }
+  #params h3 { margin: 4px 0 8px; font-size: 13px; color:#9ad; }
+  a { color: #9ad; }
+</style>
+</head>
+<body>
+<header>
+  <strong>CRT slang shaders</strong>
+  <label>Media: <input type="file" id="file" accept="image/*,video/*"></label>
+  <label>Shader: <select id="preset"></select></label>
+  <label>Output: <select id="resolution">
+    <option value="1920x1080" selected>1080p</option>
+    <option value="2560x1440">1440p</option>
+    <option value="3840x2160">4K</option>
+    <option value="1280x720">720p</option>
+  </select></label>
+  <button id="reload">Reload shader</button>
+  <button id="resetParams">Reset params</button>
+</header>
+<div id="status">Loading…</div>
+<div id="content">
+  <div id="view"><canvas id="canvas" width="1920" height="1080"></canvas></div>
+  <div id="params"><h3>Shader parameters</h3><div id="paramList"></div></div>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
