@@ -390,6 +390,7 @@ export class CrtRuntime {
       return {
         linear: consumer ? consumer.filterLinear : true,
         wrap: consumer ? consumer.wrapMode : 'clamp_to_edge',
+        mip: consumer ? !!consumer.mipmapInput && !!this.passes[k].needsMips : false,
       };
     };
 
@@ -419,13 +420,13 @@ export class CrtRuntime {
       const k = +passOut[1];
       const p = this.passes[k];
       const s = samplerForOutput(k);
-      return { tex: p.outputTexture, w: p.outW, h: p.outH, sampler: { ...s, mip: false } };
+      return { tex: p.outputTexture, w: p.outW, h: p.outH, sampler: s };
     }
     if (this.aliasToPass.has(stripped)) {
       const k = this.aliasToPass.get(stripped);
       const p = this.passes[k];
       const s = samplerForOutput(k);
-      return { tex: p.outputTexture, w: p.outW, h: p.outH, sampler: { ...s, mip: false } };
+      return { tex: p.outputTexture, w: p.outW, h: p.outH, sampler: s };
     }
     if (this.luts.has(stripped)) {
       const l = this.luts.get(stripped);
