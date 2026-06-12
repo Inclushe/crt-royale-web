@@ -25,6 +25,8 @@ const ui = {
   file: document.getElementById('file'),
   preset: document.getElementById('preset'),
   resolution: document.getElementById('resolution'),
+  inputRes: document.getElementById('inputRes'),
+  aspect: document.getElementById('aspect'),
   reload: document.getElementById('reload'),
   resetParams: document.getElementById('resetParams'),
   flipY: document.getElementById('flipY'),
@@ -59,6 +61,7 @@ async function listPresets() {
 
 const state = {
   runtime: null,
+  feed: document.createElement('canvas'),
   loader: new SourceLoader(fetchText),
   parameters: [],
   paramValues: {},
@@ -67,7 +70,11 @@ const state = {
   running: false,
 };
 
+let loadGeneration = 0;
+
 async function loadPreset(presetPath) {
+  const gen = ++loadGeneration;
+  const stale = () => gen !== loadGeneration;
   const presetUrl = RAW_BASE + presetPath;
   status(`Fetching preset ${presetPath}…`);
   const preset = parsePreset(await fetchText(presetUrl));
@@ -83,6 +90,7 @@ async function loadPreset(presetPath) {
     }
     compiledPasses.push({
       meta: pass,
+      rawSrc: src,
       vertexSrc: buildStageSource(src, 'VERTEX'),
       fragmentSrc: buildStageSource(src, 'FRAGMENT'),
     });
@@ -94,26 +102,87 @@ async function loadPreset(presetPath) {
     if (!t.path) continue;
     const url = resolveUrl(presetUrl, t.path);
     const blob = await (await fetch(url)).blob();
-    lutBitmaps.set(t.name, await createImageBitmap(blob));
+    lutBitmaps.set(t.name, await createImageBitmap(blob, { imageOrientation: 'flipY' }));
   }
 
+  if (stale()) return;
   state.parameters = [...allParams.values()];
   state.presetOverrides = preset.parameterOverrides;
   resetParamValues();
   buildParamUI();
 
-  const [w, h] = ui.resolution.value.split('x').map(Number);
+  const [w, h] = outputSize();
   ui.canvas.width = w;
   ui.canvas.height = h;
   state.runtime.viewport = { width: w, height: h };
   status('Compiling shaders (WebGL)…');
   await new Promise(r => setTimeout(r)); // let the status paint
-  state.runtime.build(compiledPasses, preset.textures, lutBitmaps, { width: w, height: h });
-  state.runtime.setParams(state.paramValues);
-  if (state.media) {
-    state.runtime.setOriginal(state.media.source, state.media.width, state.media.height, state.media.isVideo);
+  if (stale()) return;
+  // Legacy ESSL 1.00 shaders can hit restrictions WebGL2 keeps (non-constant
+  // loop bounds, no derivatives, ...). Retry the failing pass as ES 3.00
+  // behind a keyword-mapping prelude.
+  const retried = new Set();
+  for (;;) {
+    try {
+      state.runtime.build(compiledPasses, preset.textures, lutBitmaps, { width: w, height: h });
+      break;
+    } catch (e) {
+      const m = String(e.message).match(/^pass(\d+) /);
+      const k = m ? +m[1] : -1;
+      if (k < 0 || retried.has(k)) throw e;
+      retried.add(k);
+      console.warn(`[crt] pass${k}: retrying as ES 3.00 (${String(e.message).split('\n').slice(0, 2).join(' | ')})`);
+      compiledPasses[k].vertexSrc = buildStageSource(compiledPasses[k].rawSrc, 'VERTEX', { es3compat: true });
+      compiledPasses[k].fragmentSrc = buildStageSource(compiledPasses[k].rawSrc, 'FRAGMENT', { es3compat: true });
+    }
   }
+  state.runtime.setParams(state.paramValues);
+  if (state.media) applyFeed();
   status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
+}
+
+function feedSize() {
+  const v = ui.inputRes.value;
+  if (v === 'native' || !state.media) {
+    return state.media ? [state.media.width, state.media.height] : [320, 240];
+  }
+  const [w, h] = v.split('x').map(Number);
+  return [w, h];
+}
+
+function drawFeed() {
+  if (!state.media) return;
+  const ctx = state.feed.getContext('2d');
+  if (state.media.isVideo && state.media.source.readyState < 2) return;
+  ctx.drawImage(state.media.source, 0, 0, state.feed.width, state.feed.height);
+}
+
+// (Re)size the feed canvas and hand it to the runtime as the input frame.
+function applyFeed() {
+  const [w, h] = feedSize();
+  state.feed.width = w;
+  state.feed.height = h;
+  drawFeed();
+  state.runtime.setOriginal(state.feed, w, h, state.media.isVideo);
+}
+
+function outputSize() {
+  const [, baseH] = ui.resolution.value.split('x').map(Number);
+  const a = ui.aspect.value;
+  let ratio;
+  if (a === 'source') {
+    const [fw, fh] = feedSize();
+    ratio = fw / fh;
+  } else {
+    const [an, ad] = a.split(':').map(Number);
+    ratio = an / ad;
+  }
+  return [Math.round(baseH * ratio / 2) * 2, baseH];
+}
+
+function applyOutputSize() {
+  const [w, h] = outputSize();
+  if (state.runtime) state.runtime.setViewport(w, h);
 }
 
 function resetParamValues() {
@@ -181,14 +250,17 @@ async function onFile(file) {
     state.media = { source: bmp, width: bmp.width, height: bmp.height, isVideo: false };
   }
   if (state.runtime && state.runtime.passes.length) {
-    state.runtime.setOriginal(state.media.source, state.media.width, state.media.height, state.media.isVideo);
-    status(`Rendering ${file.name} (${state.media.width}x${state.media.height})`);
+    applyFeed();
+    applyOutputSize();
+    const [fw, fh] = feedSize();
+    status(`Rendering ${file.name} (${state.media.width}x${state.media.height} -> ${fw}x${fh})`);
   }
 }
 
 function frame() {
   if (state.runtime && state.media) {
     try {
+      if (state.media.isVideo) drawFeed();
       state.runtime.render();
     } catch (e) {
       status('Render error: ' + e.message);
@@ -220,9 +292,10 @@ async function init() {
       state.loader.cache.clear();
       loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
     });
-    ui.resolution.addEventListener('change', () => {
-      const [w, h] = ui.resolution.value.split('x').map(Number);
-      if (state.runtime) state.runtime.setViewport(w, h);
+    ui.resolution.addEventListener('change', applyOutputSize);
+    ui.aspect.addEventListener('change', applyOutputSize);
+    ui.inputRes.addEventListener('change', () => {
+      if (state.media) { applyFeed(); applyOutputSize(); }
     });
     ui.flipY.addEventListener('change', () => {
       if (state.runtime) state.runtime.setFlipY(ui.flipY.checked);
@@ -242,3 +315,6 @@ async function init() {
 }
 
 init();
+
+// debug handle for tooling/tests
+window.__crt = state;

@@ -46,18 +46,18 @@ export class CrtRuntime {
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -1, +1, 0, 0,
-      +1, +1, 1, 0,
-      -1, -1, 0, 1,
-      +1, -1, 1, 1,
-    ]), gl.STATIC_DRAW);
-    this.quadFlip = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadFlip);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
       -1, -1, 0, 0,
       +1, -1, 1, 0,
       -1, +1, 0, 1,
       +1, +1, 1, 1,
+    ]), gl.STATIC_DRAW);
+    this.quadFlip = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadFlip);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, +1, 0, 0,
+      +1, +1, 1, 0,
+      -1, -1, 0, 1,
+      +1, -1, 1, 1,
     ]), gl.STATIC_DRAW);
 
     this.identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
@@ -98,7 +98,8 @@ export class CrtRuntime {
       if (!bmp) continue;
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      // ImageBitmaps ignore UNPACK_FLIP_Y_WEBGL; they are flipped at decode time
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
       if (t.mipmap) gl.generateMipmap(gl.TEXTURE_2D);
       this.applyTexParams(gl.TEXTURE_2D, { linear: t.linear, wrap: t.wrapMode, mipmap: t.mipmap });
@@ -129,7 +130,7 @@ export class CrtRuntime {
         uniforms.push({ name, type: info.type, loc: gl.getUniformLocation(prog, info.name) });
       }
       return {
-        index: i, meta, prog, uniforms,
+        index: i, meta, prog, uniforms, vertexSrc, fragmentSrc,
         isLast: i === compiledPasses.length - 1,
         texture: null, fbo: null, outW: 0, outH: 0, inW: 0, inH: 0,
       };
@@ -151,7 +152,7 @@ export class CrtRuntime {
     this.passes = [];
   }
 
-  setOriginal(source, width, height, isVideo) {
+  setOriginal(source, width, height, dynamic) {
     const gl = this.gl;
     if (this.original) gl.deleteTexture(this.original.texture);
     const texture = gl.createTexture();
@@ -160,7 +161,7 @@ export class CrtRuntime {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
     const m0 = this.passes[0] ? this.passes[0].meta : { filterLinear: true, wrapMode: 'clamp_to_edge' };
     this.applyTexParams(gl.TEXTURE_2D, { linear: m0.filterLinear, wrap: m0.wrapMode, mipmap: false });
-    this.original = { source, width, height, isVideo, texture };
+    this.original = { source, width, height, dynamic, texture };
     this.frameCount = 0;
     if (this.passes.length) this.layout();
   }
@@ -281,7 +282,8 @@ export class CrtRuntime {
       const k = +m[1] - 1; // Pass1 = output of the first pass
       if (k < 0 || k >= passes.length) return null;
       if (m[2] === 'Texture') return { texture: texOfPass(k) };
-      if (m[2] === 'InputSize') return { kind: 'vec2', get: () => [passes[k].inW, passes[k].inH] };
+      // InputSize = rendered size of that pass's output framebuffer; it only
+      // differs from TextureSize through POT padding, which we don't use.
       return { kind: 'vec2', get: sizeOfPass(k) };
     }
     if ((m = name.match(/^PassPrev(\d*)(Texture|TextureSize|InputSize)$/))) {
@@ -291,9 +293,11 @@ export class CrtRuntime {
       if (m[2] === 'Texture') {
         return { texture: k === -1 ? () => orig().texture : texOfPass(k) };
       }
+      // InputSize/TextureSize both describe pass k's output framebuffer
+      // (they only differ through POT padding, which we don't use)
       const size = () => k === -1
         ? [orig().width, orig().height]
-        : (m[2] === 'InputSize' ? [passes[k].inW, passes[k].inH] : [passes[k].outW, passes[k].outH]);
+        : [passes[k].outW, passes[k].outH];
       return { kind: 'vec2', get: size };
     }
     // alias-based: <ALIAS>texture / <ALIAS>texture_size / <ALIAS>video_size
@@ -323,13 +327,10 @@ export class CrtRuntime {
     const gl = this.gl;
     if (!this.original || !this.passes.length) return;
 
-    if (this.original.isVideo) {
-      const v = this.original.source;
-      if (v.readyState >= 2) {
-        gl.bindTexture(gl.TEXTURE_2D, this.original.texture);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, v);
-      }
+    if (this.original.dynamic) {
+      gl.bindTexture(gl.TEXTURE_2D, this.original.texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, this.original.source);
     }
 
     for (const p of this.passes) {

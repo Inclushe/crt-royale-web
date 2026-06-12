@@ -94,6 +94,7 @@ function evalTokens(tokens) {
 }
 
 function evalCondition(expr, macros) {
+  expr = expr.replace(/\/\/.*$|\/\*.*?\*\//g, ' '); // strip trailing comments
   // defined(X) / defined X
   expr = expr.replace(/defined\s*\(\s*(\w+)\s*\)|defined\s+(\w+)/g,
     (_, a, b) => (macros.has(a ?? b) ? '1' : '0'));
@@ -375,6 +376,11 @@ const GLOBAL_DECL_RE =
 const SKIP_QUALIFIERS = /\b(uniform|attribute|varying|in|out|struct|precision|return)\b/;
 
 export function hoistGlobalInitializers(source) {
+  // When a shader blanks `const` with a macro (a Cg-conversion idiom), const
+  // globals become plain globals with non-constant initializers and must be
+  // hoisted. When `const` is real, const globals are legal constant
+  // expressions and must be left alone.
+  const constBlanked = /^[ \t]*#[ \t]*define[ \t]+const[ \t]*$/m.test(source);
   const lines = source.split('\n');
   let depth = 0;
   const assignments = [];
@@ -386,7 +392,8 @@ export function hoistGlobalInitializers(source) {
 
     if (depth === 0 && !/^\s*#/.test(line)) {
       const m = GLOBAL_DECL_RE.exec(stripped);
-      if (m && !SKIP_QUALIFIERS.test(m[2] + ' ' + m[3])) {
+      const isConst = m && /\bconst\b/.test(m[2]);
+      if (m && !SKIP_QUALIFIERS.test(m[2] + ' ' + m[3]) && (!isConst || constBlanked)) {
         // collect the full declaration (may span lines) up to its ';'
         let decl = stripped;
         let j = i;

@@ -45,29 +45,67 @@ export function parseParameterPragmas(source) {
 }
 
 // Builds the GLSL ES source for one stage, targeting WebGL2.
-export function buildStageSource(source, stage /* 'VERTEX' | 'FRAGMENT' */) {
+// `es3compat` compiles a legacy (no #version) ESSL 1.00 shader as ES 3.00
+// behind a small keyword-mapping prelude; used when ESSL 1.00 restrictions
+// (non-constant loop bounds, derivatives, ...) reject the shader.
+export function buildStageSource(source, stage /* 'VERTEX' | 'FRAGMENT' */, { es3compat = false } = {}) {
   const lines = source.split('\n');
   const versionIdx = lines.findIndex(l => l.trim().startsWith('#version'));
   const hasVersion = versionIdx >= 0;
   if (hasVersion) lines.splice(versionIdx, 1);
+
+  // derivatives don't exist in WebGL2's ESSL 1.00; force the ES3 path
+  if (!hasVersion && /\b(fwidth|dFdx|dFdy)\s*\(/.test(source)) es3compat = true;
+  const asEs3 = hasVersion || es3compat;
 
   const flattened = flattenConditionals(lines.join('\n'), {
     [stage]: 1,
     PARAMETER_UNIFORM: 1,
     GL_ES: 1,
     GL_FRAGMENT_PRECISION_HIGH: 1,
-    __VERSION__: hasVersion ? 300 : 100,
+    __VERSION__: asEs3 ? 300 : 100,
   });
 
   const hoisted = applyEsCompatShims(hoistGlobalInitializers(flattened));
 
   const header = [];
-  if (hasVersion) header.push('#version 300 es');
+  if (asEs3) header.push('#version 300 es');
+  if (!hasVersion && es3compat) {
+    // ESSL1 -> ESSL3 keyword mapping, only for what the shader actually uses
+    // (shaders with their own __VERSION__ >= 130 branches need none of it)
+    if (/\battribute\b/.test(hoisted)) header.push('#define attribute in');
+    if (/\bvarying\b/.test(hoisted)) {
+      header.push(stage === 'VERTEX' ? '#define varying out' : '#define varying in');
+    }
+    if (/\btexture2D\s*\(/.test(hoisted)) header.push('#define texture2D texture');
+    if (/\btexture2DLod\s*\(/.test(hoisted)) header.push('#define texture2DLod textureLod');
+    const code = hoisted.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    if (stage === 'FRAGMENT' && /\bgl_FragColor\b/.test(code)) {
+      const ownOut = code.match(/\bout\s+(?:highp\s+|mediump\s+|lowp\s+|COMPAT_PRECISION\s+)?vec4\s+(\w*FragColor)\b/);
+      if (ownOut) {
+        // hybrid shader: declares its own output but still writes gl_FragColor
+        header.push(`#define gl_FragColor ${ownOut[1]}`);
+      } else {
+        header.push('out highp vec4 _crt_FragColor;', '#define gl_FragColor _crt_FragColor');
+      }
+    }
+  }
   if (stage === 'FRAGMENT') header.push('precision highp float;', 'precision highp int;');
 
   const body = hoisted
     .split('\n')
-    .filter(l => !/^\s*#pragma\s+parameter\b/.test(l));
+    .filter(l => !/^\s*#pragma\s+parameter\b/.test(l))
+    // Same-name uniforms must agree in precision across stages; the COMPAT
+    // boilerplate often gives them different default precisions per stage.
+    // floats -> highp; ints -> mediump (highp int fragment support is not
+    // guaranteed in ESSL 1.00).
+    .map(l => l
+      .replace(
+        /^(\s*uniform\s+)(?:COMPAT_PRECISION\s+|lowp\s+|mediump\s+|highp\s+)?((?:float|vec[234]|mat[234])\b)/,
+        '$1highp $2')
+      .replace(
+        /^(\s*uniform\s+)(?:COMPAT_PRECISION\s+|lowp\s+|mediump\s+|highp\s+)?((?:int|ivec[234])\b)/,
+        '$1mediump $2'));
 
   return [...header, ...body].join('\n');
 }

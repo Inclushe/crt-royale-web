@@ -27,6 +27,19 @@
   <strong>CRT slang shaders</strong>
   <label>Media: <input type="file" id="file" accept="image/*,video/*"></label>
   <label>Shader: <select id="preset"></select></label>
+  <label>Input: <select id="inputRes">
+    <option value="native">Native</option>
+    <option value="256x240">256×240 (NES)</option>
+    <option value="256x224">256×224 (SNES)</option>
+    <option value="320x224">320×224 (Genesis)</option>
+    <option value="320x240" selected>320×240 (PS1 / 240p)</option>
+    <option value="640x480">640×480 (480p)</option>
+  </select></label>
+  <label>Aspect: <select id="aspect">
+    <option value="4:3" selected>4:3</option>
+    <option value="16:9">16:9</option>
+    <option value="source">Match input</option>
+  </select></label>
   <label>Output: <select id="resolution">
     <option value="1920x1080" selected>1080p</option>
     <option value="2560x1440">1440p</option>

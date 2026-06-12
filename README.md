@@ -22,9 +22,12 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-Pick a shader (default `crt-royale`), choose an output resolution
-(720p–4K), and upload a photo or video. Shader parameters declared via
-`#pragma parameter` (e.g. crt-royale's geometry/AA settings) appear as sliders.
+Pick a shader (default `crt-royale`), choose an **input resolution** (the
+shaders are designed for retro console resolutions — NES/SNES 256px,
+Genesis 320×224, PS1 320×240; the upload is resampled to it), an aspect
+ratio and an output resolution (720p–4K), then upload a photo or video.
+Shader parameters declared via `#pragma parameter` (e.g. crt-royale's
+geometry/AA settings) appear as sliders.
 
 ## How it works
 
@@ -78,6 +81,11 @@ crt-royale-fake-bloom, …).
   level 0 instead). crt-royale's GLSL preset does not use it.
 - History (`Prev*Texture`) and feedback bindings are not implemented (unused
   by the crt presets).
-- CRT shaders are designed for low-resolution video-game frames. Photos work,
-  but scanline structure follows the upload's pixel height — a ~240–480 px
-  tall source gives the classic look.
+- CRT shaders are designed for low-resolution video-game frames; the input
+  resolution selector resamples uploads accordingly (240p default).
+- 73 of the 77 `crt/` presets validate; the remaining four
+  (crt-royale-ntsc-*, crt-royale-pal-r57shell, mame_hlsl) use preprocessor
+  token pasting (`##`) or other constructs GLSL ES forbids outright.
+- Legacy ESSL 1.00 shaders that hit WebGL2 restrictions (non-constant loop
+  bounds, derivatives) are automatically retried as ES 3.00 behind a small
+  keyword-mapping prelude.
