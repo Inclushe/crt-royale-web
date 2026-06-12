@@ -27,6 +27,7 @@ const ui = {
   resolution: document.getElementById('resolution'),
   inputRes: document.getElementById('inputRes'),
   inputCustom: document.getElementById('inputCustom'),
+  fit: document.getElementById('fit'),
   aspect: document.getElementById('aspect'),
   reload: document.getElementById('reload'),
   resetParams: document.getElementById('resetParams'),
@@ -173,11 +174,35 @@ function updateInputCustomBox() {
   }
 }
 
+// How the media is mapped onto the feed canvas when their aspect ratios
+// differ: 'stretch' fills (distorting), 'fit' letterboxes the source before
+// it enters the shader chain. 'auto' letterboxes only when a fixed console
+// resolution is selected with "Match input" aspect (an explicit 4:3/16:9
+// display aspect compensates the stretch like real non-square-pixel consoles
+// did, so stretch is the authentic choice there).
+function fitMode() {
+  const v = ui.fit.value;
+  if (v !== 'auto') return v;
+  const isPresetRes = /^\d+x\d+$/.test(ui.inputRes.value);
+  return (isPresetRes && ui.aspect.value === 'source') ? 'fit' : 'stretch';
+}
+
 function drawFeed() {
   if (!state.media) return;
   const ctx = state.feed.getContext('2d');
   if (state.media.isVideo && state.media.source.readyState < 2) return;
-  ctx.drawImage(state.media.source, 0, 0, state.feed.width, state.feed.height);
+  const fw = state.feed.width, fh = state.feed.height;
+  const mw = state.media.width, mh = state.media.height;
+  if (fitMode() === 'fit' && Math.abs(fw / fh - mw / mh) > 0.01) {
+    const scale = Math.min(fw / mw, fh / mh);
+    const dw = Math.max(1, Math.round(mw * scale));
+    const dh = Math.max(1, Math.round(mh * scale));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, fw, fh);
+    ctx.drawImage(state.media.source, Math.floor((fw - dw) / 2), Math.floor((fh - dh) / 2), dw, dh);
+  } else {
+    ctx.drawImage(state.media.source, 0, 0, fw, fh);
+  }
 }
 
 // (Re)size the feed canvas and hand it to the runtime as the input frame.
@@ -355,7 +380,13 @@ async function init() {
       loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
     });
     ui.resolution.addEventListener('change', applyOutputSize);
-    ui.aspect.addEventListener('change', applyOutputSize);
+    ui.aspect.addEventListener('change', () => {
+      applyOutputSize();
+      if (state.media) applyFeed(); // 'auto' fit mode depends on the aspect choice
+    });
+    ui.fit.addEventListener('change', () => {
+      if (state.media) applyFeed();
+    });
     ui.inputRes.addEventListener('change', () => {
       updateInputCustomBox();
       if (state.media) { applyFeed(); applyOutputSize(); }

@@ -25,7 +25,10 @@ python3 -m http.server 8000
 Pick a shader (default `crt-royale`), choose an **input resolution** — retro
 console presets (NES/SNES 256px, Genesis 320×224, PS1 320×240), a downscale
 factor (2×/3×/4×/custom) relative to the upload's native size, or a fully
-custom WxH; the upload is resampled to it — plus a content aspect ratio and
+custom WxH; the upload is resampled to it — a **fit mode** (Auto /
+Scale-to-fit / Stretch) deciding whether a source whose aspect differs from
+the input resolution is letterboxed before entering the shader or stretched
+to fill — plus a content aspect ratio and
 an output resolution (720p–4K), then upload a photo or video. The canvas is
 always exactly the chosen output resolution; the shader chain renders into
 the largest aspect-correct rectangle centered in it (letter/pillarboxed
