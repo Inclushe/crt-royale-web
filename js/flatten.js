@@ -419,11 +419,11 @@ export function hoistGlobalInitializers(source) {
   let text = out.join('\n');
   const mainMatch = text.match(/void\s+main\s*\(\s*(void)?\s*\)/);
   if (!mainMatch) return source;
-  const initFn = `void __crt_init_globals()\n{\n${assignments.join('\n')}\n}\n\n`;
+  const initFn = `void crt_init_globals_()\n{\n${assignments.join('\n')}\n}\n\n`;
   let idx = mainMatch.index;
   text = text.slice(0, idx) + initFn + text.slice(idx);
   // insert the call after main's opening brace
   const braceIdx = text.indexOf('{', idx + initFn.length);
-  text = text.slice(0, braceIdx + 1) + '\n    __crt_init_globals();' + text.slice(braceIdx + 1);
+  text = text.slice(0, braceIdx + 1) + '\n    crt_init_globals_();' + text.slice(braceIdx + 1);
   return text;
 }

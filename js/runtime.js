@@ -30,7 +30,7 @@ function compileShader(gl, type, source, label) {
 
 export class CrtRuntime {
   constructor(canvas) {
-    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL2 is not available in this browser');
     this.gl = gl;
     this.canvas = canvas;
@@ -46,18 +46,18 @@ export class CrtRuntime {
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -1, -1, 0, 0,
-      +1, -1, 1, 0,
-      -1, +1, 0, 1,
-      +1, +1, 1, 1,
-    ]), gl.STATIC_DRAW);
-    this.quadFlip = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadFlip);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
       -1, +1, 0, 0,
       +1, +1, 1, 0,
       -1, -1, 0, 1,
       +1, -1, 1, 1,
+    ]), gl.STATIC_DRAW);
+    this.quadFlip = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadFlip);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1, 0, 0,
+      +1, -1, 1, 0,
+      -1, +1, 0, 1,
+      +1, +1, 1, 1,
     ]), gl.STATIC_DRAW);
 
     this.identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
