@@ -1,344 +1,166 @@
-// WebGPU runtime for libretro slang shader presets compiled to WGSL.
-// Implements the multi-pass semantics of .slangp presets: pass scaling,
-// sRGB/float framebuffers, alias/PassOutput/LUT texture bindings, per-pass
-// samplers, mipmapped inputs and the builtin uniform semantics
-// (MVP, SourceSize, OriginalSize, OutputSize, FrameCount, parameters, ...).
+// WebGL2 runtime for libretro .glslp shader presets.
+// Implements the multi-pass semantics of the GLSL preset format: per-pass
+// scaling (source/viewport/absolute), sRGB/float framebuffers, LUT textures,
+// alias / PassN / PassPrevN bindings, and the builtin uniforms
+// (MVPMatrix, Texture, InputSize, TextureSize, OutputSize, FrameCount, ...).
+// Reference: https://docs.libretro.com/development/shader/glsl-shaders/
 
 const WRAP_MODE = {
-  clamp_to_border: 'clamp-to-edge', // WebGPU has no border addressing
-  clamp_to_edge: 'clamp-to-edge',
-  repeat: 'repeat',
-  mirrored_repeat: 'mirror-repeat',
+  clamp_to_border: 'CLAMP_TO_EDGE', // WebGL has no border addressing
+  clamp_to_edge: 'CLAMP_TO_EDGE',
+  repeat: 'REPEAT',
+  mirrored_repeat: 'MIRRORED_REPEAT',
 };
 
-const PRAGMA_FORMAT = {
-  R8G8B8A8_UNORM: 'rgba8unorm',
-  R8G8B8A8_SRGB: 'rgba8unorm-srgb',
-  A2B10G10R10_UNORM_PACK32: 'rgb10a2unorm',
-  R16G16B16A16_SFLOAT: 'rgba16float',
-  R32G32B32A32_SFLOAT: 'rgba16float', // float32 is not filterable without a feature
-};
-
-function passFormat(pass, pragmaFormat) {
-  if (pass.srgbFramebuffer) return 'rgba8unorm-srgb';
-  if (pass.floatFramebuffer) return 'rgba16float';
-  if (pragmaFormat && PRAGMA_FORMAT[pragmaFormat]) return PRAGMA_FORMAT[pragmaFormat];
-  return 'rgba8unorm';
-}
-
-// ---------------------------------------------------------------------------
-// WGSL introspection: Slang emits flat resource declarations; we read binding
-// slots and resource kinds straight out of the generated code, and take
-// uniform-buffer member offsets from Slang's reflection JSON.
-// ---------------------------------------------------------------------------
-
-export function parseWgslBindings(wgsl) {
-  const bindings = [];
-  const re = /@group\((\d+)\)\s*@binding\((\d+)\)\s*var(<uniform>|<storage[^>]*>)?\s+(\w+)\s*:\s*([^;]+);/g;
-  let m;
-  while ((m = re.exec(wgsl))) {
-    const [, group, binding, space, name, type] = m;
-    let kind;
-    if (space === '<uniform>') kind = 'buffer';
-    else if (/texture_2d/.test(type)) kind = 'texture';
-    else if (/sampler/.test(type)) kind = 'sampler';
-    else kind = 'other';
-    bindings.push({
-      group: +group,
-      binding: +binding,
-      name,
-      type: type.trim(),
-      kind,
-    });
+function compileShader(gl, type, source, label) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, source);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh);
+    const lines = source.split('\n');
+    const ctx = (log.match(/0:(\d+)/) || [])[1];
+    const around = ctx
+      ? lines.slice(Math.max(0, ctx - 3), +ctx + 2).join('\n')
+      : '';
+    throw new Error(`${label} shader compile failed:\n${log}\n${around}`);
   }
-  return bindings;
-}
-
-// Walk Slang reflection JSON and collect uniform buffer layouts:
-//   name -> { size, fields: [{name, offset}] }
-export function parseBufferLayouts(reflection) {
-  const buffers = new Map();
-  if (!reflection || !reflection.parameters) return buffers;
-  for (const p of reflection.parameters) {
-    const t = p.type;
-    if (!t) continue;
-    if (t.kind === 'constantBuffer' || t.kind === 'parameterBlock') {
-      const elem = t.elementType;
-      const fields = [];
-      let size = 0;
-      if (elem && elem.fields) {
-        for (const f of elem.fields) {
-          const off = f.binding && f.binding.kind === 'uniform' ? f.binding.offset : 0;
-          const fsize = f.binding && f.binding.kind === 'uniform' ? (f.binding.size ?? 0) : 0;
-          fields.push({ name: f.name, offset: off, size: fsize });
-          size = Math.max(size, off + fsize);
-        }
-      }
-      buffers.set(p.name, { size: Math.max(16, Math.ceil(size / 16) * 16), fields });
-    }
-  }
-  return buffers;
-}
-
-// ---------------------------------------------------------------------------
-
-function mat4Identity() {
-  // column-major
-  return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-}
-
-function sizeVec(w, h) {
-  return new Float32Array([w, h, 1 / w, 1 / h]);
-}
-
-class MipGenerator {
-  constructor(device) {
-    this.device = device;
-    this.sampler = device.createSampler({ minFilter: 'linear', magFilter: 'linear' });
-    this.pipelines = new Map();
-    this.module = device.createShaderModule({
-      code: `
-        @group(0) @binding(0) var src: texture_2d<f32>;
-        @group(0) @binding(1) var smp: sampler;
-        struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
-        @vertex fn vmain(@builtin(vertex_index) i: u32) -> VOut {
-          var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
-          var out: VOut;
-          out.pos = vec4f(p[i], 0.0, 1.0);
-          out.uv = p[i] * vec2f(0.5, -0.5) + vec2f(0.5, 0.5);
-          return out;
-        }
-        @fragment fn fmain(in: VOut) -> @location(0) vec4f {
-          return textureSampleLevel(src, smp, in.uv, 0.0);
-        }`,
-    });
-  }
-
-  pipeline(format) {
-    if (!this.pipelines.has(format)) {
-      this.pipelines.set(format, this.device.createRenderPipeline({
-        layout: 'auto',
-        vertex: { module: this.module, entryPoint: 'vmain' },
-        fragment: { module: this.module, entryPoint: 'fmain', targets: [{ format }] },
-        primitive: { topology: 'triangle-list' },
-      }));
-    }
-    return this.pipelines.get(format);
-  }
-
-  generate(encoder, texture, format, mipLevelCount) {
-    const pipeline = this.pipeline(format);
-    for (let level = 1; level < mipLevelCount; level++) {
-      const srcView = texture.createView({ baseMipLevel: level - 1, mipLevelCount: 1 });
-      const dstView = texture.createView({ baseMipLevel: level, mipLevelCount: 1 });
-      const bg = this.device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: srcView },
-          { binding: 1, resource: this.sampler },
-        ],
-      });
-      const rp = encoder.beginRenderPass({
-        colorAttachments: [{ view: dstView, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
-      });
-      rp.setPipeline(pipeline);
-      rp.setBindGroup(0, bg);
-      rp.draw(3);
-      rp.end();
-    }
-  }
-}
-
-function mipLevelsFor(w, h) {
-  return 1 + Math.floor(Math.log2(Math.max(w, h)));
+  return sh;
 }
 
 export class CrtRuntime {
-  static async create(canvas) {
-    if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) throw new Error('No WebGPU adapter found');
-    const device = await adapter.requestDevice();
-    const context = canvas.getContext('webgpu');
-    const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format: canvasFormat, alphaMode: 'opaque' });
-    return new CrtRuntime(canvas, device, context, canvasFormat);
-  }
-
-  constructor(canvas, device, context, canvasFormat) {
+  constructor(canvas) {
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+    if (!gl) throw new Error('WebGL2 is not available in this browser');
+    this.gl = gl;
     this.canvas = canvas;
-    this.device = device;
-    this.context = context;
-    this.canvasFormat = canvasFormat;
-    this.mipGen = new MipGenerator(device);
-    this.samplerCache = new Map();
-    this.frameCount = 0;
-    this.paramValues = {};
+    this.floatExt = gl.getExtension('EXT_color_buffer_float');
     this.passes = [];
     this.luts = new Map();
+    this.frameCount = 0;
+    this.paramValues = {};
     this.original = null; // { source, width, height, isVideo, texture }
     this.flipY = false;
-    this.warned = new Set();
-    this.quad = this.makeQuad(false);
-    this.quadFlipped = this.makeQuad(true);
+
+    // quad: VertexCoord.xy + TexCoord.xy (z, w default to 0, 1)
+    this.quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1, 0, 0,
+      +1, -1, 1, 0,
+      -1, +1, 0, 1,
+      +1, +1, 1, 1,
+    ]), gl.STATIC_DRAW);
+    this.quadFlip = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadFlip);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, +1, 0, 0,
+      +1, +1, 1, 0,
+      -1, -1, 0, 1,
+      +1, -1, 1, 1,
+    ]), gl.STATIC_DRAW);
+
+    this.identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   }
 
-  makeQuad(flipY) {
-    // Position vec4 + TexCoord vec2, triangle strip.
-    // Texture v=0 is the top image row (copyExternalImageToTexture convention),
-    // NDC y=+1 is the top of the render target.
-    const y = flipY ? -1 : 1;
-    const data = new Float32Array([
-      -1, +y, 0, 1, 0, 0,
-      +1, +y, 0, 1, 1, 0,
-      -1, -y, 0, 1, 0, 1,
-      +1, -y, 0, 1, 1, 1,
-    ]);
-    const buf = this.device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-    this.device.queue.writeBuffer(buf, 0, data);
-    return buf;
+  setFlipY(v) { this.flipY = v; }
+  setParams(values) { this.paramValues = values; }
+
+  passFormat(meta) {
+    const gl = this.gl;
+    if (meta.srgbFramebuffer) return { internal: gl.SRGB8_ALPHA8, srgb: true };
+    if (meta.floatFramebuffer && this.floatExt) return { internal: gl.RGBA16F, float: true };
+    return { internal: gl.RGBA8 };
   }
 
-  setFlipY(v) {
-    this.flipY = v;
+  applyTexParams(target, { linear, wrap, mipmap }) {
+    const gl = this.gl;
+    const w = gl[WRAP_MODE[wrap] ?? 'CLAMP_TO_EDGE'];
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, w);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, w);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER,
+      mipmap ? (linear ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST_MIPMAP_NEAREST)
+             : (linear ? gl.LINEAR : gl.NEAREST));
   }
 
-  sampler(filterLinear, wrapMode, mipmap) {
-    const key = `${filterLinear}|${wrapMode}|${mipmap}`;
-    if (!this.samplerCache.has(key)) {
-      const address = WRAP_MODE[wrapMode] ?? 'clamp-to-edge';
-      const filter = filterLinear ? 'linear' : 'nearest';
-      this.samplerCache.set(key, this.device.createSampler({
-        minFilter: filter,
-        magFilter: filter,
-        mipmapFilter: mipmap ? 'linear' : 'nearest',
-        addressModeU: address,
-        addressModeV: address,
-        lodMinClamp: 0,
-        lodMaxClamp: mipmap ? 32 : 0,
-      }));
-    }
-    return this.samplerCache.get(key);
-  }
-
-  // compiledPasses: [{ pass(preset entry), wgsl, reflection, pragmaFormat, parameters }]
-  // lutBitmaps: Map name -> ImageBitmap, presetTextures: preset.textures
-  async build(compiledPasses, presetTextures, lutBitmaps, viewport) {
+  // compiledPasses: [{ meta(preset pass entry), vertexSrc, fragmentSrc }]
+  build(compiledPasses, presetTextures, lutBitmaps, viewport) {
+    const gl = this.gl;
     this.viewport = viewport;
-    this.compiled = compiledPasses;
-    this.presetTextures = presetTextures;
+    this.destroyPasses();
 
-    // Upload LUT textures once.
+    // LUTs
+    for (const t of this.luts.values()) gl.deleteTexture(t.texture);
     this.luts.clear();
     for (const t of presetTextures) {
       const bmp = lutBitmaps.get(t.name);
       if (!bmp) continue;
-      const mips = t.mipmap ? mipLevelsFor(bmp.width, bmp.height) : 1;
-      const tex = this.device.createTexture({
-        size: [bmp.width, bmp.height],
-        format: 'rgba8unorm',
-        mipLevelCount: mips,
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-      });
-      this.device.queue.copyExternalImageToTexture({ source: bmp }, { texture: tex }, [bmp.width, bmp.height]);
-      if (mips > 1) {
-        const enc = this.device.createCommandEncoder();
-        this.mipGen.generate(enc, tex, 'rgba8unorm', mips);
-        this.device.queue.submit([enc.finish()]);
-      }
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+      if (t.mipmap) gl.generateMipmap(gl.TEXTURE_2D);
+      this.applyTexParams(gl.TEXTURE_2D, { linear: t.linear, wrap: t.wrapMode, mipmap: t.mipmap });
       this.luts.set(t.name, { texture: tex, width: bmp.width, height: bmp.height, meta: t });
     }
 
-    this.buildPipelines();
+    // programs
+    this.passes = compiledPasses.map(({ meta, vertexSrc, fragmentSrc }, i) => {
+      const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSrc, `pass${i} vertex`);
+      const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSrc, `pass${i} fragment`);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.bindAttribLocation(prog, 0, 'VertexCoord');
+      gl.bindAttribLocation(prog, 1, 'TexCoord');
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(`pass${i} link failed: ${gl.getProgramInfoLog(prog)}`);
+      }
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+
+      const uniforms = [];
+      const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+      for (let u = 0; u < n; u++) {
+        const info = gl.getActiveUniform(prog, u);
+        const name = info.name.replace(/\[0\]$/, '');
+        uniforms.push({ name, type: info.type, loc: gl.getUniformLocation(prog, info.name) });
+      }
+      return {
+        index: i, meta, prog, uniforms,
+        isLast: i === compiledPasses.length - 1,
+        texture: null, fbo: null, outW: 0, outH: 0, inW: 0, inH: 0,
+      };
+    });
+
+    this.aliasToPass = new Map();
+    for (const p of this.passes) if (p.meta.alias) this.aliasToPass.set(p.meta.alias, p.index);
+
     if (this.original) this.layout();
   }
 
-  buildPipelines() {
+  destroyPasses() {
+    const gl = this.gl;
+    for (const p of this.passes) {
+      if (p.prog) gl.deleteProgram(p.prog);
+      if (p.texture) gl.deleteTexture(p.texture);
+      if (p.fbo) gl.deleteFramebuffer(p.fbo);
+    }
     this.passes = [];
-    const n = this.compiled.length;
-    for (let i = 0; i < n; i++) {
-      const { pass, wgsl, reflection, pragmaFormat } = this.compiled[i];
-      const isLast = i === n - 1;
-      const format = isLast ? this.canvasFormat : passFormat(pass, pragmaFormat);
-      const bindings = parseWgslBindings(wgsl);
-      const bufferLayouts = parseBufferLayouts(reflection);
-      const module = this.device.createShaderModule({ code: wgsl, label: `pass${i}` });
-      const entryNames = this.findEntryPoints(wgsl);
-      const pipeline = this.device.createRenderPipeline({
-        label: `pass${i}`,
-        layout: 'auto',
-        vertex: {
-          module,
-          entryPoint: entryNames.vertex,
-          buffers: [{
-            arrayStride: 24,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x4' },
-              { shaderLocation: 1, offset: 16, format: 'float32x2' },
-            ],
-          }],
-        },
-        fragment: { module, entryPoint: entryNames.fragment, targets: [{ format }] },
-        primitive: { topology: 'triangle-strip' },
-      });
-
-      // Create uniform buffers for each <uniform> binding.
-      const buffers = [];
-      for (const b of bindings) {
-        if (b.kind !== 'buffer') continue;
-        const layout = this.matchBufferLayout(bufferLayouts, b.name);
-        const size = layout ? layout.size : 256;
-        const gpuBuf = this.device.createBuffer({
-          label: `pass${i}:${b.name}`,
-          size,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        buffers.push({ binding: b, layout, gpuBuf, cpu: new ArrayBuffer(size) });
-      }
-
-      this.passes.push({
-        meta: pass, index: i, isLast, format, wgsl, bindings, buffers, pipeline,
-        outputTexture: null, outW: 0, outH: 0, bindGroups: null,
-        needsMips: false, // set during layout if some consumer needs mipmaps
-      });
-    }
-
-    // alias map: name -> producing pass index
-    this.aliasToPass = new Map();
-    this.passes.forEach(p => { if (p.meta.alias) this.aliasToPass.set(p.meta.alias, p.index); });
-
-    // mark passes whose output needs a mip chain
-    this.passes.forEach(p => {
-      if (p.meta.mipmapInput && p.index > 0) this.passes[p.index - 1].needsMips = true;
-    });
-  }
-
-  findEntryPoints(wgsl) {
-    const v = wgsl.match(/@vertex\s+fn\s+(\w+)/);
-    const f = wgsl.match(/@fragment\s+fn\s+(\w+)/);
-    if (!v || !f) throw new Error('Could not find entry points in generated WGSL');
-    return { vertex: v[1], fragment: f[1] };
-  }
-
-  matchBufferLayout(bufferLayouts, wgslName) {
-    if (bufferLayouts.has(wgslName)) return bufferLayouts.get(wgslName);
-    // Slang may suffix names (e.g. params_0); match on prefix.
-    for (const [name, layout] of bufferLayouts) {
-      if (wgslName === name || wgslName.startsWith(name + '_') || name.startsWith(wgslName)) return layout;
-    }
-    return null;
   }
 
   setOriginal(source, width, height, isVideo) {
-    const texture = this.device.createTexture({
-      size: [width, height],
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
+    const gl = this.gl;
+    if (this.original) gl.deleteTexture(this.original.texture);
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    const m0 = this.passes[0] ? this.passes[0].meta : { filterLinear: true, wrapMode: 'clamp_to_edge' };
+    this.applyTexParams(gl.TEXTURE_2D, { linear: m0.filterLinear, wrap: m0.wrapMode, mipmap: false });
     this.original = { source, width, height, isVideo, texture };
-    if (!isVideo) {
-      this.device.queue.copyExternalImageToTexture({ source }, { texture }, [width, height]);
-    }
     this.frameCount = 0;
     if (this.passes.length) this.layout();
   }
@@ -350,10 +172,14 @@ export class CrtRuntime {
     if (this.passes.length && this.original) this.layout();
   }
 
-  // Compute pass sizes and (re)create intermediate textures + bind groups.
+  // Compute pass sizes, allocate intermediate framebuffers, set sampling
+  // parameters (the output of pass k is sampled with the settings pass k+1
+  // declares for its input — RetroArch semantics).
   layout() {
+    const gl = this.gl;
     const vp = this.viewport;
     let srcW = this.original.width, srcH = this.original.height;
+
     for (const p of this.passes) {
       const m = p.meta;
       const dim = (type, scale, srcDim, vpDim) => {
@@ -361,235 +187,184 @@ export class CrtRuntime {
           case 'source': return Math.max(1, Math.round(srcDim * scale));
           case 'viewport': return Math.max(1, Math.round(vpDim * scale));
           case 'absolute': return Math.max(1, Math.round(scale));
-          default:
-            return p.isLast ? vpDim : Math.max(1, Math.round(srcDim * scale));
+          default: return p.isLast ? vpDim : Math.max(1, Math.round(srcDim * scale));
         }
       };
-      p.outW = dim(m.scaleTypeX, m.scaleX, srcW, vp.width);
-      p.outH = dim(m.scaleTypeY, m.scaleY, srcH, vp.height);
-      if (p.isLast) { p.outW = vp.width; p.outH = vp.height; }
+      p.inW = srcW; p.inH = srcH;
+      p.outW = p.isLast ? vp.width : dim(m.scaleTypeX, m.scaleX, srcW, vp.width);
+      p.outH = p.isLast ? vp.height : dim(m.scaleTypeY, m.scaleY, srcH, vp.height);
 
       if (!p.isLast) {
-        if (p.outputTexture) p.outputTexture.destroy();
-        const mips = p.needsMips ? mipLevelsFor(p.outW, p.outH) : 1;
-        p.mipLevelCount = mips;
-        p.outputTexture = this.device.createTexture({
-          label: `pass${p.index}-out`,
-          size: [p.outW, p.outH],
-          format: p.format,
-          mipLevelCount: mips,
-          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        if (p.texture) gl.deleteTexture(p.texture);
+        if (p.fbo) gl.deleteFramebuffer(p.fbo);
+        const fmt = this.passFormat(m);
+        p.srgb = !!fmt.srgb;
+        const consumer = this.passes[p.index + 1].meta;
+        const needsMips = !!consumer.mipmapInput && !fmt.srgb;
+        if (consumer.mipmapInput && fmt.srgb) {
+          console.warn(`[crt] pass${p.index}: mipmap_input on an sRGB framebuffer is not supported in WebGL2; sampling level 0 only`);
+        }
+        const levels = needsMips ? 1 + Math.floor(Math.log2(Math.max(p.outW, p.outH))) : 1;
+        p.texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, p.texture);
+        gl.texStorage2D(gl.TEXTURE_2D, levels, fmt.internal, p.outW, p.outH);
+        this.applyTexParams(gl.TEXTURE_2D, {
+          linear: consumer.filterLinear, wrap: consumer.wrapMode, mipmap: needsMips,
         });
-      }
-      p.inW = srcW; p.inH = srcH;
-      srcW = p.outW; srcH = p.outH;
-    }
-    this.buildBindGroups();
-  }
-
-  // Resolve a texture binding name to { texture(view info), w, h, samplerInfo }.
-  resolveTextureName(name, passIndex) {
-    const stripped = name.replace(/_\d+$/, '');
-    const passMeta = (k) => this.passes[k] ? this.passes[k].meta : null;
-    const samplerForOutput = (k) => {
-      // Output of pass k is sampled with the settings the *next* pass declares
-      // for its input (RetroArch attaches filtering to the framebuffer's consumer).
-      const consumer = passMeta(k + 1);
-      return {
-        linear: consumer ? consumer.filterLinear : true,
-        wrap: consumer ? consumer.wrapMode : 'clamp_to_edge',
-        mip: consumer ? !!consumer.mipmapInput && !!this.passes[k].needsMips : false,
-      };
-    };
-
-    if (stripped === 'Source') {
-      const m = this.passes[passIndex].meta;
-      if (passIndex === 0) {
-        return {
-          tex: this.original.texture, w: this.original.width, h: this.original.height,
-          sampler: { linear: m.filterLinear, wrap: m.wrapMode, mip: false },
-        };
-      }
-      const prev = this.passes[passIndex - 1];
-      return {
-        tex: prev.outputTexture, w: prev.outW, h: prev.outH,
-        sampler: { linear: m.filterLinear, wrap: m.wrapMode, mip: !!m.mipmapInput },
-      };
-    }
-    if (stripped === 'Original' || stripped === 'OriginalHistory0') {
-      const m0 = this.passes[0].meta;
-      return {
-        tex: this.original.texture, w: this.original.width, h: this.original.height,
-        sampler: { linear: m0.filterLinear, wrap: m0.wrapMode, mip: false },
-      };
-    }
-    const passOut = stripped.match(/^PassOutput(\d+)$/);
-    if (passOut) {
-      const k = +passOut[1];
-      const p = this.passes[k];
-      const s = samplerForOutput(k);
-      return { tex: p.outputTexture, w: p.outW, h: p.outH, sampler: s };
-    }
-    if (this.aliasToPass.has(stripped)) {
-      const k = this.aliasToPass.get(stripped);
-      const p = this.passes[k];
-      const s = samplerForOutput(k);
-      return { tex: p.outputTexture, w: p.outW, h: p.outH, sampler: s };
-    }
-    if (this.luts.has(stripped)) {
-      const l = this.luts.get(stripped);
-      return {
-        tex: l.texture, w: l.width, h: l.height,
-        sampler: { linear: l.meta.linear, wrap: l.meta.wrapMode, mip: l.meta.mipmap },
-      };
-    }
-    return null;
-  }
-
-  buildBindGroups() {
-    for (const p of this.passes) {
-      const groups = new Map(); // group index -> entries[]
-      const texInfo = new Map(); // base name -> resolved
-      const addEntry = (g, entry) => {
-        if (!groups.has(g)) groups.set(g, []);
-        groups.get(g).push(entry);
-      };
-
-      for (const b of p.bindings) {
-        if (b.kind === 'buffer') {
-          const rec = p.buffers.find(x => x.binding === b);
-          addEntry(b.group, { binding: b.binding, resource: { buffer: rec.gpuBuf } });
-        } else if (b.kind === 'texture') {
-          const base = this.textureBaseName(b.name);
-          const info = this.resolveTextureName(base, p.index);
-          if (!info) throw new Error(`pass${p.index}: cannot resolve texture "${base}"`);
-          texInfo.set(base, info);
-          addEntry(b.group, { binding: b.binding, resource: info.tex.createView() });
+        p.fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, p.fbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, p.texture, 0);
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+          throw new Error(`pass${p.index}: framebuffer incomplete (0x${status.toString(16)})`);
         }
       }
-      // samplers second: resolve against the texture they belong to
-      for (const b of p.bindings) {
-        if (b.kind !== 'sampler') continue;
-        const base = this.samplerBaseName(b.name);
-        let info = base ? texInfo.get(base) : null;
-        if (!info && texInfo.size === 1) info = [...texInfo.values()][0];
-        const s = info ? info.sampler : { linear: true, wrap: 'clamp_to_edge', mip: false };
-        addEntry(b.group, { binding: b.binding, resource: this.sampler(s.linear, s.wrap, !!s.mip) });
+      srcW = p.outW; srcH = p.outH;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.resolveUniforms();
+  }
+
+  // Resolve every active uniform of every pass to a value provider.
+  resolveUniforms() {
+    for (const p of this.passes) {
+      let unit = 0;
+      p.setters = [];
+      p.textureBinds = [];
+      for (const u of p.uniforms) {
+        const r = this.resolveUniform(u, p);
+        if (r === null) {
+          console.warn(`[crt] pass${p.index}: unresolved uniform "${u.name}"`);
+          continue;
+        }
+        if (r.texture !== undefined) {
+          const myUnit = unit++;
+          p.textureBinds.push({ unit: myUnit, get: r.texture });
+          this.gl.useProgram(p.prog);
+          this.gl.uniform1i(u.loc, myUnit);
+        } else {
+          p.setters.push({ loc: u.loc, kind: r.kind, get: r.get });
+        }
       }
-
-      p.bindGroups = [];
-      for (const [g, entries] of groups) {
-        p.bindGroups.push({
-          index: g,
-          group: this.device.createBindGroup({
-            label: `pass${p.index}-g${g}`,
-            layout: p.pipeline.getBindGroupLayout(g),
-            entries,
-          }),
-        });
-      }
-      p.texInfo = texInfo;
     }
   }
 
-  textureBaseName(wgslName) {
-    return wgslName.replace(/(_texture)?(_\d+)?$/, '');
-  }
+  resolveUniform(u, p) {
+    const name = u.name;
+    const passes = this.passes;
+    const orig = () => this.original;
+    const sizeOfPass = (k) => () => [passes[k].outW, passes[k].outH];
+    const texOfPass = (k) => () => passes[k].texture;
 
-  samplerBaseName(wgslName) {
-    const m = wgslName.match(/^(.*?)(_sampler|Sampler)?(_\d+)?$/);
-    return m ? m[1] : wgslName;
-  }
-
-  setParams(values) {
-    this.paramValues = values;
-  }
-
-  // Fill uniform members by semantic name.
-  uniformValue(name, pass) {
-    if (name === 'MVP') return mat4Identity();
-    if (name === 'SourceSize') {
-      const src = pass.index === 0
-        ? { w: this.original.width, h: this.original.height }
-        : { w: this.passes[pass.index - 1].outW, h: this.passes[pass.index - 1].outH };
-      return sizeVec(src.w, src.h);
+    if (name === 'MVPMatrix') return { kind: 'mat4', get: () => this.identity };
+    if (name === 'Texture') {
+      return { texture: p.index === 0 ? () => orig().texture : texOfPass(p.index - 1) };
     }
-    if (name === 'OriginalSize' || name === 'OriginalHistorySize0') {
-      return sizeVec(this.original.width, this.original.height);
+    if (name === 'InputSize' || name === 'TextureSize') {
+      return { kind: 'vec2', get: () => [p.inW, p.inH] };
     }
-    if (name === 'OutputSize') return sizeVec(pass.outW, pass.outH);
-    if (name === 'FinalViewportSize') return sizeVec(this.viewport.width, this.viewport.height);
+    if (name === 'OutputSize') return { kind: 'vec2', get: () => [p.outW, p.outH] };
     if (name === 'FrameCount') {
-      let fc = this.frameCount;
-      if (pass.meta.frameCountMod) fc %= pass.meta.frameCountMod;
-      return new Uint32Array([fc]);
+      return {
+        kind: 'int',
+        get: () => p.meta.frameCountMod ? this.frameCount % p.meta.frameCountMod : this.frameCount,
+      };
     }
-    if (name === 'FrameDirection') return new Int32Array([1]);
-    const sizeOf = name.match(/^(.*)Size$/);
-    if (sizeOf) {
-      const base = sizeOf[1];
-      const po = base.match(/^PassOutput(\d+)$/);
-      if (po) { const p = this.passes[+po[1]]; return sizeVec(p.outW, p.outH); }
+    if (name === 'FrameDirection') return { kind: 'int', get: () => 1 };
+
+    let m;
+    if ((m = name.match(/^Orig(Texture|TextureSize|InputSize)$/))) {
+      if (m[1] === 'Texture') return { texture: () => orig().texture };
+      return { kind: 'vec2', get: () => [orig().width, orig().height] };
+    }
+    if ((m = name.match(/^Pass(\d+)(Texture|TextureSize|InputSize)$/))) {
+      const k = +m[1] - 1; // Pass1 = output of the first pass
+      if (k < 0 || k >= passes.length) return null;
+      if (m[2] === 'Texture') return { texture: texOfPass(k) };
+      if (m[2] === 'InputSize') return { kind: 'vec2', get: () => [passes[k].inW, passes[k].inH] };
+      return { kind: 'vec2', get: sizeOfPass(k) };
+    }
+    if ((m = name.match(/^PassPrev(\d*)(Texture|TextureSize|InputSize)$/))) {
+      const back = m[1] === '' ? 1 : +m[1];
+      const k = p.index - back; // k == -1 refers to the original input
+      if (k < -1) return null;
+      if (m[2] === 'Texture') {
+        return { texture: k === -1 ? () => orig().texture : texOfPass(k) };
+      }
+      const size = () => k === -1
+        ? [orig().width, orig().height]
+        : (m[2] === 'InputSize' ? [passes[k].inW, passes[k].inH] : [passes[k].outW, passes[k].outH]);
+      return { kind: 'vec2', get: size };
+    }
+    // alias-based: <ALIAS>texture / <ALIAS>texture_size / <ALIAS>video_size
+    if ((m = name.match(/^(\w+?)(texture|texture_size|video_size|Texture|TextureSize|InputSize)$/))) {
+      const base = m[1];
       if (this.aliasToPass.has(base)) {
-        const p = this.passes[this.aliasToPass.get(base)];
-        return sizeVec(p.outW, p.outH);
-      }
-      if (this.luts.has(base)) {
-        const l = this.luts.get(base);
-        return sizeVec(l.width, l.height);
+        const k = this.aliasToPass.get(base);
+        if (m[2] === 'texture' || m[2] === 'Texture') return { texture: texOfPass(k) };
+        return { kind: 'vec2', get: sizeOfPass(k) };
       }
     }
-    if (name in this.paramValues) return new Float32Array([this.paramValues[name]]);
-    if (!this.warned.has(name)) {
-      this.warned.add(name);
-      console.warn(`[crt] unresolved uniform member "${name}" (pass ${pass.index}); left as zero`);
+    if (this.luts.has(name)) {
+      const l = this.luts.get(name);
+      return { texture: () => l.texture };
+    }
+    if ((m = name.match(/^(\w+?)_size$/)) && this.luts.has(m[1])) {
+      const l = this.luts.get(m[1]);
+      return { kind: 'vec2', get: () => [l.width, l.height] };
+    }
+    if (name in this.paramValues) {
+      return { kind: 'float', get: () => this.paramValues[name] };
     }
     return null;
-  }
-
-  updateUniforms(pass) {
-    for (const rec of pass.buffers) {
-      if (!rec.layout) continue;
-      const view = new Uint8Array(rec.cpu);
-      for (const f of rec.layout.fields) {
-        const v = this.uniformValue(f.name, pass);
-        if (v == null) continue;
-        view.set(new Uint8Array(v.buffer, v.byteOffset, Math.min(v.byteLength, rec.cpu.byteLength - f.offset)), f.offset);
-      }
-      this.device.queue.writeBuffer(rec.gpuBuf, 0, rec.cpu);
-    }
   }
 
   render() {
+    const gl = this.gl;
     if (!this.original || !this.passes.length) return;
+
     if (this.original.isVideo) {
       const v = this.original.source;
       if (v.readyState >= 2) {
-        this.device.queue.copyExternalImageToTexture(
-          { source: v }, { texture: this.original.texture },
-          [this.original.width, this.original.height]);
+        gl.bindTexture(gl.TEXTURE_2D, this.original.texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, v);
       }
     }
 
-    const encoder = this.device.createCommandEncoder();
     for (const p of this.passes) {
-      this.updateUniforms(p);
-      const view = p.isLast
-        ? this.context.getCurrentTexture().createView()
-        : p.outputTexture.createView({ baseMipLevel: 0, mipLevelCount: 1 });
-      const rp = encoder.beginRenderPass({
-        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
-      });
-      rp.setPipeline(p.pipeline);
-      rp.setVertexBuffer(0, p.isLast && this.flipY ? this.quadFlipped : this.quad);
-      for (const bg of p.bindGroups) rp.setBindGroup(bg.index, bg.group);
-      rp.draw(4);
-      rp.end();
-      if (!p.isLast && p.needsMips && p.mipLevelCount > 1) {
-        this.mipGen.generate(encoder, p.outputTexture, p.format, p.mipLevelCount);
+      // mipmaps for this pass's input, if requested (and not sRGB-stored)
+      if (p.meta.mipmapInput && p.index > 0) {
+        const prev = this.passes[p.index - 1];
+        if (!prev.srgb && prev.texture) {
+          gl.bindTexture(gl.TEXTURE_2D, prev.texture);
+          gl.generateMipmap(gl.TEXTURE_2D);
+        }
       }
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, p.isLast ? null : p.fbo);
+      gl.viewport(0, 0, p.outW, p.outH);
+      gl.useProgram(p.prog);
+
+      for (const t of p.textureBinds) {
+        gl.activeTexture(gl.TEXTURE0 + t.unit);
+        gl.bindTexture(gl.TEXTURE_2D, t.get());
+      }
+      for (const s of p.setters) {
+        const v = s.get();
+        if (s.kind === 'mat4') gl.uniformMatrix4fv(s.loc, false, v);
+        else if (s.kind === 'vec2') gl.uniform2f(s.loc, v[0], v[1]);
+        else if (s.kind === 'int') gl.uniform1i(s.loc, v);
+        else gl.uniform1f(s.loc, v);
+      }
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, p.isLast && this.flipY ? this.quadFlip : this.quad);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
-    this.device.queue.submit([encoder.finish()]);
     this.frameCount++;
   }
 }

@@ -1,24 +1,23 @@
-// Glue: fetch shaders from the libretro/slang-shaders GitHub repo, compile them
-// client-side with the Slang compiler (WASM), and render uploads with WebGPU.
+// Glue: fetch shader presets from the libretro/glsl-shaders GitHub repo and
+// render uploaded photos/videos through them with WebGL2.
 // Everything runs locally in the browser; uploaded media never leaves the page.
 
 import { parsePreset } from './slangp.js';
-import { SourceLoader, processShaderSource, resolveUrl } from './source.js';
-import { SlangCompiler } from './compile.js';
+import { SourceLoader, buildStageSource, parseParameterPragmas, resolveUrl } from './source.js';
 import { CrtRuntime } from './runtime.js';
 
-const RAW_BASE = 'https://raw.githubusercontent.com/libretro/slang-shaders/master/';
-const API_LIST = 'https://api.github.com/repos/libretro/slang-shaders/contents/crt';
-const DEFAULT_PRESETS = [
-  'crt/crt-royale.slangp',
-  'crt/crt-royale-intel.slangp',
-  'crt/crt-royale-fake-bloom.slangp',
-  'crt/crt-geom.slangp',
-  'crt/crt-easymode.slangp',
-  'crt/crt-aperture.slangp',
-  'crt/crt-lottes.slangp',
-  'crt/fakelottes.slangp',
-  'crt/zfast-crt.slangp',
+const RAW_BASE = 'https://raw.githubusercontent.com/libretro/glsl-shaders/master/';
+const API_LIST = 'https://api.github.com/repos/libretro/glsl-shaders/contents/crt';
+const FALLBACK_PRESETS = [
+  'crt/crt-royale.glslp',
+  'crt/crt-royale-fake-bloom.glslp',
+  'crt/crt-geom.glslp',
+  'crt/crt-easymode.glslp',
+  'crt/crt-aperture.glslp',
+  'crt/crt-lottes.glslp',
+  'crt/crt-hyllian.glslp',
+  'crt/fakelottes.glslp',
+  'crt/zfast-crt.glslp',
 ];
 
 const ui = {
@@ -44,42 +43,31 @@ async function fetchText(url) {
   return r.text();
 }
 
-async function loadSlangModule() {
-  status('Loading Slang compiler (WASM)…');
-  const createModule = (await import('../vendor/slang-wasm.js')).default;
-  const resp = await fetch(new URL('../vendor/slang-wasm.wasm.gz', import.meta.url));
-  if (!resp.ok) throw new Error('Failed to fetch slang-wasm.wasm.gz');
-  const ds = new DecompressionStream('gzip');
-  const wasmBinary = await new Response(resp.body.pipeThrough(ds)).arrayBuffer();
-  return createModule({ wasmBinary });
-}
-
 async function listPresets() {
   try {
     const r = await fetch(API_LIST);
     if (!r.ok) throw new Error('rate limited');
     const entries = await r.json();
     const presets = entries
-      .filter(e => e.type === 'file' && e.name.endsWith('.slangp'))
+      .filter(e => e.type === 'file' && e.name.endsWith('.glslp'))
       .map(e => `crt/${e.name}`);
-    return presets.length ? presets : DEFAULT_PRESETS;
+    return presets.length ? presets : FALLBACK_PRESETS;
   } catch {
-    return DEFAULT_PRESETS;
+    return FALLBACK_PRESETS;
   }
 }
 
 const state = {
-  compiler: null,
   runtime: null,
   loader: new SourceLoader(fetchText),
-  parameters: [],       // merged #pragma parameter definitions
+  parameters: [],
   paramValues: {},
   presetOverrides: {},
-  media: null,          // { source, width, height, isVideo }
+  media: null, // { source, width, height, isVideo }
   running: false,
 };
 
-async function compilePreset(presetPath) {
+async function loadPreset(presetPath) {
   const presetUrl = RAW_BASE + presetPath;
   status(`Fetching preset ${presetPath}…`);
   const preset = parsePreset(await fetchText(presetUrl));
@@ -88,13 +76,16 @@ async function compilePreset(presetPath) {
   const allParams = new Map();
   for (const pass of preset.passes) {
     const shaderUrl = resolveUrl(presetUrl, pass.path);
-    status(`Compiling pass ${pass.index + 1}/${preset.passes.length}: ${pass.path.split('/').pop()}…`);
-    const src = await state.loader.loadWithIncludes(shaderUrl);
-    const stages = processShaderSource(src);
-    const { wgsl, reflection } = state.compiler.compilePass(
-      stages.vertex, stages.fragment, `p${pass.index}`);
-    for (const p of stages.parameters) if (!allParams.has(p.name)) allParams.set(p.name, p);
-    compiledPasses.push({ pass, wgsl, reflection, pragmaFormat: stages.format, parameters: stages.parameters });
+    status(`Preparing pass ${pass.index + 1}/${preset.passes.length}: ${pass.path.split('/').pop()}…`);
+    const src = await state.loader.load(shaderUrl);
+    for (const p of parseParameterPragmas(src)) {
+      if (!allParams.has(p.name)) allParams.set(p.name, p);
+    }
+    compiledPasses.push({
+      meta: pass,
+      vertexSrc: buildStageSource(src, 'VERTEX'),
+      fragmentSrc: buildStageSource(src, 'FRAGMENT'),
+    });
   }
 
   status('Fetching LUT textures…');
@@ -112,13 +103,17 @@ async function compilePreset(presetPath) {
   buildParamUI();
 
   const [w, h] = ui.resolution.value.split('x').map(Number);
-  ui.canvas.width = w; ui.canvas.height = h;
-  await state.runtime.build(compiledPasses, preset.textures, lutBitmaps, { width: w, height: h });
+  ui.canvas.width = w;
+  ui.canvas.height = h;
+  state.runtime.viewport = { width: w, height: h };
+  status('Compiling shaders (WebGL)…');
+  await new Promise(r => setTimeout(r)); // let the status paint
+  state.runtime.build(compiledPasses, preset.textures, lutBitmaps, { width: w, height: h });
   state.runtime.setParams(state.paramValues);
   if (state.media) {
     state.runtime.setOriginal(state.media.source, state.media.width, state.media.height, state.media.isVideo);
   }
-  status(`Ready: ${presetPath} (${preset.passes.length} passes). ${state.media ? '' : 'Upload a photo or video to start.'}`);
+  status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
 }
 
 function resetParamValues() {
@@ -129,8 +124,19 @@ function resetParamValues() {
   }
 }
 
+function fmt(v) {
+  const s = (+v).toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+  return s === '' || s === '-' ? '0' : s;
+}
+
 function buildParamUI() {
   ui.paramList.innerHTML = '';
+  if (!state.parameters.length) {
+    const div = document.createElement('div');
+    div.textContent = 'This shader has no runtime parameters.';
+    ui.paramList.append(div);
+    return;
+  }
   for (const p of state.parameters) {
     const div = document.createElement('div');
     div.className = 'param';
@@ -143,10 +149,10 @@ function buildParamUI() {
     range.value = state.paramValues[p.name];
     const val = document.createElement('span');
     val.className = 'val';
-    val.textContent = (+range.value).toFixed(4).replace(/\.?0+$/, '') || '0';
+    val.textContent = fmt(range.value);
     range.addEventListener('input', () => {
       state.paramValues[p.name] = parseFloat(range.value);
-      val.textContent = (+range.value).toFixed(4).replace(/\.?0+$/, '') || '0';
+      val.textContent = fmt(range.value);
       if (state.runtime) state.runtime.setParams(state.paramValues);
     });
     div.append(label, range, val);
@@ -195,30 +201,25 @@ function frame() {
 
 async function init() {
   try {
-    if (!navigator.gpu) {
-      status('This demo needs WebGPU (Chrome/Edge 113+, Safari 18+, Firefox 141+).');
-      return;
-    }
+    state.runtime = new CrtRuntime(ui.canvas);
+
     const presets = await listPresets();
     for (const p of presets) {
       const opt = document.createElement('option');
       opt.value = p;
-      opt.textContent = p.replace(/^crt\//, '').replace(/\.slangp$/, '');
-      if (p === 'crt/crt-royale.slangp') opt.selected = true;
+      opt.textContent = p.replace(/^crt\//, '').replace(/\.glslp$/, '');
+      if (p === 'crt/crt-royale.glslp') opt.selected = true;
       ui.preset.append(opt);
     }
 
-    state.runtime = await CrtRuntime.create(ui.canvas);
-    const module = await loadSlangModule();
-    status('Creating Slang session (compiles GLSL builtin module, one-time)…');
-    await new Promise(r => setTimeout(r)); // let status paint before the long sync call
-    state.compiler = new SlangCompiler(module);
-
-    await compilePreset(ui.preset.value);
+    await loadPreset(ui.preset.value);
 
     ui.file.addEventListener('change', () => onFile(ui.file.files[0]).catch(e => status('Media error: ' + e.message)));
-    ui.preset.addEventListener('change', () => compilePreset(ui.preset.value).catch(e => status('Compile error: ' + e.message)));
-    ui.reload.addEventListener('click', () => compilePreset(ui.preset.value).catch(e => status('Compile error: ' + e.message)));
+    ui.preset.addEventListener('change', () => loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message)));
+    ui.reload.addEventListener('click', () => {
+      state.loader.cache.clear();
+      loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
+    });
     ui.resolution.addEventListener('change', () => {
       const [w, h] = ui.resolution.value.split('x').map(Number);
       if (state.runtime) state.runtime.setViewport(w, h);

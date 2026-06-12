@@ -1,60 +1,83 @@
-# CRT slang shaders on the web
+# CRT libretro shaders on the web
 
-Runs [libretro slang shaders](https://github.com/libretro/slang-shaders) (focus:
-`crt/crt-royale`) on photos and videos, entirely in the browser.
+Runs [libretro GLSL shaders](https://github.com/libretro/glsl-shaders) (focus:
+the `crt/` folder, including the 12-pass **crt-royale**) on photos and videos,
+entirely in the browser with WebGL2.
 
 - Upload a photo or video; nothing is uploaded anywhere — all processing is local.
-- Shader sources are fetched on the fly from the libretro/slang-shaders GitHub
-  repository (raw.githubusercontent.com) and are **not modified**.
-- Compilation happens client-side with the [Slang](https://github.com/shader-slang/slang)
-  compiler's WebAssembly build (the same toolchain as
-  [slang-playground](https://github.com/shader-slang/slang-playground)), using its
-  GLSL compatibility mode: libretro's Vulkan-GLSL passes are translated to WGSL
-  and rendered with WebGPU.
+- Shader presets (`.glslp`) and shader sources (`.glsl`) are fetched on the fly
+  from the libretro/glsl-shaders GitHub repository (raw.githubusercontent.com).
+- The shader files are used as-is. Stage selection (`#define VERTEX` /
+  `#define FRAGMENT`) is part of the format's contract — RetroArch does the
+  same — and a small set of mechanical, shader-agnostic GLSL-ES strictness
+  fixes is applied client-side at load time (see below).
 
 ## Running
 
-Serve the directory with any static file server and open it in a WebGPU-capable
-browser (Chrome/Edge 113+, Safari 18+, Firefox 141+):
+Serve the directory with any static file server and open it in a browser with
+WebGL2 (any current browser):
 
 ```sh
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
+Pick a shader (default `crt-royale`), choose an output resolution
+(720p–4K), and upload a photo or video. Shader parameters declared via
+`#pragma parameter` (e.g. crt-royale's geometry/AA settings) appear as sliders.
+
 ## How it works
 
-1. `js/slangp.js` parses the `.slangp` preset (passes, scaling, framebuffer
-   formats, LUT textures, parameter overrides).
-2. `js/source.js` fetches each `.slang` pass, resolves `#include`s relative to
-   the GitHub URL, extracts `#pragma parameter/name/format` metadata, and splits
-   the file into its vertex/fragment stages (this is part of the libretro
-   container format, the GLSL bodies stay untouched).
-3. `js/compile.js` compiles each stage with slang-wasm (GLSL in → WGSL out) and
-   grabs Slang's reflection JSON for uniform layouts.
-4. `js/runtime.js` is a WebGPU multi-pass engine implementing libretro preset
-   semantics: per-pass scaling (`source`/`viewport`/`absolute`), sRGB and float
-   framebuffers, alias / `PassOutput#` / LUT bindings, per-pass samplers,
-   mipmapped inputs (`mipmap_input`), and builtin uniforms (`MVP`, `SourceSize`,
-   `OriginalSize`, `OutputSize`, `FrameCount`, `<Alias>Size`, parameters, ...).
-5. `js/main.js` wires up the UI: media upload, preset picker (listed from the
-   GitHub API with a fallback list), output resolution (720p–4K), and parameter
-   sliders generated from `#pragma parameter`.
+1. `js/slangp.js` parses the `.glslp` preset: passes, scaling rules
+   (`source`/`viewport`/`absolute`), filtering, wrap modes, sRGB/float
+   framebuffers, LUT textures, parameter overrides.
+2. `js/source.js` + `js/flatten.js` prepare each `.glsl` file for WebGL2:
+   - select the stage and resolve the preprocessor conditionals
+     (`#if defined(VERTEX)` …) with `VERTEX`/`FRAGMENT`, `GL_ES`,
+     `__VERSION__` etc. defined — keeping all macros and code untouched;
+   - map desktop `#version 130` to `#version 300 es`;
+   - **hoist global initializers** into an init function called at the top of
+     `main()`: the Cg-converted shaders blank out `const` with a macro, and
+     GLSL ES forbids non-constant global initializers (desktop GL allows them);
+   - **insert explicit `float(...)` casts** where the shader relies on desktop
+     GLSL's implicit int→float conversions, driven by the file's own
+     declarations (loop counters, `const int`s, int uniforms vs. float/vector
+     identifiers and single-signature function parameters).
+   These transforms are generic — the same code runs for every shader; nothing
+   is patched per-shader.
+3. `js/runtime.js` is a WebGL2 multi-pass engine implementing the libretro
+   GLSL preset semantics: per-pass framebuffers and scaling, sRGB
+   (`SRGB8_ALPHA8`) and float (`RGBA16F`) framebuffers, LUTs (with mipmaps),
+   `Orig*`/`Pass*`/`PassPrev*`/`<alias>texture` bindings, and the builtin
+   uniforms (`MVPMatrix`, `Texture`, `InputSize`, `TextureSize`, `OutputSize`,
+   `FrameCount`, `FrameDirection`, parameters).
+4. `js/main.js` wires up the UI: media upload, preset picker (listed from the
+   GitHub API with a fallback list), output resolution, parameter sliders.
 
-`vendor/slang-wasm.{js,wasm.gz}` is a build of the Slang compiler
-(v2026.10.2) with one patch: the global session is created with
-`enableGLSL = true` so the GLSL compatibility front end is available (official
-release wasm builds ship without the GLSL builtin module). See
-`vendor/BUILDING.md`.
+## Testing
+
+`test/validate-passes.mjs` builds every stage of a preset exactly like the web
+app does and validates it with `glslang` (GLSL ES rules, approximating ANGLE):
+
+```sh
+apt install glslang-tools
+git clone --depth 1 --filter=blob:none --sparse https://github.com/libretro/glsl-shaders /tmp/glsl-repo
+git -C /tmp/glsl-repo sparse-checkout set crt blurs
+node test/validate-passes.mjs /tmp/glsl-repo crt/crt-royale.glslp
+```
+
+All 12 crt-royale passes (24 stages) validate, as do the other crt presets
+(crt-geom, crt-easymode, crt-lottes, crt-aperture, zfast-crt, fakelottes,
+crt-royale-fake-bloom, …).
 
 ## Notes / limitations
 
-- `wrap_mode = clamp_to_border` is mapped to clamp-to-edge (WebGPU has no
-  border addressing).
-- `PassFeedback#` / `OriginalHistory#` are not implemented (crt-royale does not
-  use them).
-- Pass outputs declared `srgb_framebuffer` use `rgba8unorm-srgb` textures;
-  `float_framebuffer` uses `rgba16float`.
-- CRT shaders are designed for low-resolution video-game frames; photos work,
-  but the scanline structure follows the upload's pixel height. Output
-  resolution (1080p/1440p/4K) is selectable in the header.
+- `wrap_mode = clamp_to_border` maps to clamp-to-edge (WebGL has no border
+  addressing).
+- `mipmap_input` on an sRGB framebuffer is unsupported in WebGL2 (samples
+  level 0 instead). crt-royale's GLSL preset does not use it.
+- History (`Prev*Texture`) and feedback bindings are not implemented (unused
+  by the crt presets).
+- CRT shaders are designed for low-resolution video-game frames. Photos work,
+  but scanline structure follows the upload's pixel height — a ~240–480 px
+  tall source gives the classic look.
