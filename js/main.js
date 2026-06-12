@@ -31,6 +31,8 @@ const ui = {
   reload: document.getElementById('reload'),
   resetParams: document.getElementById('resetParams'),
   flipY: document.getElementById('flipY'),
+  actualSize: document.getElementById('actualSize'),
+  view: document.getElementById('view'),
   paramList: document.getElementById('paramList'),
   canvas: document.getElementById('canvas'),
 };
@@ -139,6 +141,7 @@ async function loadPreset(presetPath) {
   }
   state.runtime.setParams(state.paramValues);
   if (state.media) applyFeed();
+  applyActualSize();
   status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
 }
 
@@ -199,6 +202,32 @@ function contentAspect() {
 function applyOutputSize() {
   const [w, h] = outputSize();
   if (state.runtime) state.runtime.setViewport(w, h, contentAspect());
+  applyActualSize();
+}
+
+// 1 canvas pixel == 1 device pixel (accounts for devicePixelRatio); overflow
+// scrolls and starts centered.
+function applyActualSize() {
+  if (ui.actualSize.checked) {
+    ui.view.classList.add('actual');
+    const dpr = window.devicePixelRatio || 1;
+    ui.canvas.style.width = (ui.canvas.width / dpr) + 'px';
+    ui.canvas.style.height = (ui.canvas.height / dpr) + 'px';
+    const center = (tries) => {
+      const tx = Math.max(0, (ui.view.scrollWidth - ui.view.clientWidth) / 2);
+      const ty = Math.max(0, (ui.view.scrollHeight - ui.view.clientHeight) / 2);
+      ui.view.scrollLeft = tx;
+      ui.view.scrollTop = ty;
+      if (tries > 0 && (Math.abs(ui.view.scrollLeft - tx) > 1 || Math.abs(ui.view.scrollTop - ty) > 1)) {
+        setTimeout(() => center(tries - 1), 50);
+      }
+    };
+    setTimeout(() => center(8), 0);
+  } else {
+    ui.view.classList.remove('actual');
+    ui.canvas.style.width = '';
+    ui.canvas.style.height = '';
+  }
 }
 
 function resetParamValues() {
@@ -319,6 +348,10 @@ async function init() {
     });
     ui.flipY.addEventListener('change', () => {
       if (state.runtime) state.runtime.setFlipY(ui.flipY.checked);
+    });
+    ui.actualSize.addEventListener('change', applyActualSize);
+    window.addEventListener('resize', () => {
+      if (ui.actualSize.checked) applyActualSize();
     });
     ui.resetParams.addEventListener('click', () => {
       resetParamValues();

@@ -20,6 +20,14 @@
   .param .val { display:inline-block; width: 60px; text-align: right; }
   #params h3 { margin: 4px 0 8px; font-size: 13px; color:#9ad; }
   a { color: #9ad; }
+  /* actual-size mode: canvas at native device pixels, scrollable overflow */
+  #view.actual { overflow: auto; justify-content: flex-start; align-items: flex-start; }
+  #view.actual canvas { max-width: none; max-height: none; margin: auto; }
+  @media (max-width: 800px) {
+    #content { flex-direction: column; }
+    #view { min-height: 45vh; }
+    #params { width: auto; max-height: 45vh; border-top: 1px solid #333; }
+  }
 </style>
 </head>
 <body>
@@ -51,6 +59,7 @@
     <option value="3840x2160">4K</option>
     <option value="1280x720">720p</option>
   </select></label>
+  <label><input type="checkbox" id="actualSize"> Actual size (1:1 pixels)</label>
   <label><input type="checkbox" id="flipY"> Flip vertical</label>
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
