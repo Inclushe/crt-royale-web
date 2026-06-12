@@ -32,6 +32,7 @@ const ui = {
   resetParams: document.getElementById('resetParams'),
   flipY: document.getElementById('flipY'),
   actualSize: document.getElementById('actualSize'),
+  download: document.getElementById('download'),
   view: document.getElementById('view'),
   paramList: document.getElementById('paramList'),
   canvas: document.getElementById('canvas'),
@@ -302,6 +303,22 @@ async function onFile(file) {
   }
 }
 
+function downloadImage() {
+  if (!state.runtime || !state.media) {
+    status('Upload a photo or video before downloading.');
+    return;
+  }
+  ui.canvas.toBlob((blob) => {
+    if (!blob) { status('Download failed: could not export canvas.'); return; }
+    const preset = ui.preset.value.replace(/^crt\//, '').replace(/\.glslp$/, '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${preset}-${ui.canvas.width}x${ui.canvas.height}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }, 'image/png');
+}
+
 function frame() {
   if (state.runtime && state.media) {
     try {
@@ -358,6 +375,7 @@ async function init() {
       buildParamUI();
       if (state.runtime) state.runtime.setParams(state.paramValues);
     });
+    ui.download.addEventListener('click', downloadImage);
 
     state.running = true;
     requestAnimationFrame(frame);
