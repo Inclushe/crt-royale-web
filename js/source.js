@@ -1,9 +1,11 @@
-// Loading and preprocessing of libretro .slang shader sources:
-//  - recursive #include resolution (URL-relative, like RetroArch does on disk)
-//  - extraction of #pragma parameter / name / format metadata
-//  - splitting the single-file source into vertex and fragment stages
-// The shader code itself is never modified; this implements the slang-shader
-// *container format* (https://github.com/libretro/slang-shaders#slang-shader-format).
+// Loading and preparation of libretro .glsl shaders (libretro/glsl-shaders).
+// Each .glsl file contains both stages behind #if defined(VERTEX) /
+// defined(FRAGMENT); the runtime selects a stage by defining one of them —
+// that is the format's contract (RetroArch does the same). On top of that,
+// two strictness fixes for GLSL ES are applied mechanically to every shader
+// (see js/flatten.js); the shader logic itself is never edited.
+
+import { flattenConditionals, hoistGlobalInitializers, applyEsCompatShims } from './flatten.js';
 
 export function resolveUrl(base, rel) {
   return new URL(rel, base).href;
@@ -21,81 +23,51 @@ export class SourceLoader {
     }
     return this.cache.get(url);
   }
-
-  // Returns the source with all #include directives recursively inlined.
-  async loadWithIncludes(url, stack = []) {
-    if (stack.includes(url)) {
-      throw new Error(`Circular #include: ${[...stack, url].join(' -> ')}`);
-    }
-    const text = await this.load(url);
-    const out = [];
-    for (const line of text.split('\n')) {
-      const m = line.match(/^\s*#include\s+"([^"]+)"/);
-      if (m) {
-        const sub = await this.loadWithIncludes(resolveUrl(url, m[1]), [...stack, url]);
-        out.push(sub);
-      } else {
-        out.push(line);
-      }
-    }
-    return out.join('\n');
-  }
 }
 
-// Parses pragmas and splits stages from a fully include-resolved source.
-// Returns { vertex, fragment, parameters, name, format }
-export function processShaderSource(source) {
+// #pragma parameter ident "Description" default min max [step]
+export function parseParameterPragmas(source) {
   const parameters = [];
-  let name = null;
-  let format = null;
-
-  const common = [];
-  const vertex = [];
-  const fragment = [];
-  let target = 'common';
-
   for (const line of source.split('\n')) {
-    const pragma = line.match(/^\s*#pragma\s+(\w+)\s*(.*)$/);
-    if (pragma) {
-      const [, kind, rest] = pragma;
-      if (kind === 'stage') {
-        const stage = rest.trim();
-        if (stage !== 'vertex' && stage !== 'fragment') {
-          throw new Error(`Unknown #pragma stage: ${stage}`);
-        }
-        target = stage;
-        continue;
-      }
-      if (kind === 'name') { name = rest.trim(); continue; }
-      if (kind === 'format') { format = rest.trim(); continue; }
-      if (kind === 'parameter') {
-        // #pragma parameter ident "Description" default min max [step]
-        const m = rest.match(/^(\w+)\s+"([^"]*)"\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?/);
-        if (m) {
-          parameters.push({
-            name: m[1],
-            description: m[2],
-            initial: parseFloat(m[3]),
-            min: parseFloat(m[4]),
-            max: parseFloat(m[5]),
-            step: m[6] !== undefined ? parseFloat(m[6]) : 0.0,
-          });
-        }
-        continue;
-      }
-      // other pragmas fall through verbatim
+    const m = line.match(/^\s*#pragma\s+parameter\s+(\w+)\s+"([^"]*)"\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)(?:\s+(-?[\d.]+))?/);
+    if (m) {
+      parameters.push({
+        name: m[1],
+        description: m[2],
+        initial: parseFloat(m[3]),
+        min: parseFloat(m[4]),
+        max: parseFloat(m[5]),
+        step: m[6] !== undefined ? parseFloat(m[6]) : 0.0,
+      });
     }
-    if (target === 'common') common.push(line);
-    else if (target === 'vertex') vertex.push(line);
-    else fragment.push(line);
   }
+  return parameters;
+}
 
-  const commonStr = common.join('\n');
-  return {
-    vertex: commonStr + '\n' + vertex.join('\n'),
-    fragment: commonStr + '\n' + fragment.join('\n'),
-    parameters,
-    name,
-    format,
-  };
+// Builds the GLSL ES source for one stage, targeting WebGL2.
+export function buildStageSource(source, stage /* 'VERTEX' | 'FRAGMENT' */) {
+  const lines = source.split('\n');
+  const versionIdx = lines.findIndex(l => l.trim().startsWith('#version'));
+  const hasVersion = versionIdx >= 0;
+  if (hasVersion) lines.splice(versionIdx, 1);
+
+  const flattened = flattenConditionals(lines.join('\n'), {
+    [stage]: 1,
+    PARAMETER_UNIFORM: 1,
+    GL_ES: 1,
+    GL_FRAGMENT_PRECISION_HIGH: 1,
+    __VERSION__: hasVersion ? 300 : 100,
+  });
+
+  const hoisted = applyEsCompatShims(hoistGlobalInitializers(flattened));
+
+  const header = [];
+  if (hasVersion) header.push('#version 300 es');
+  if (stage === 'FRAGMENT') header.push('precision highp float;', 'precision highp int;');
+
+  const body = hoisted
+    .split('\n')
+    .filter(l => !/^\s*#pragma\s+parameter\b/.test(l));
+
+  return [...header, ...body].join('\n');
 }
