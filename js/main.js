@@ -28,6 +28,7 @@ const ui = {
   resolution: document.getElementById('resolution'),
   reload: document.getElementById('reload'),
   resetParams: document.getElementById('resetParams'),
+  flipY: document.getElementById('flipY'),
   paramList: document.getElementById('paramList'),
   canvas: document.getElementById('canvas'),
 };
@@ -221,6 +222,9 @@ async function init() {
     ui.resolution.addEventListener('change', () => {
       const [w, h] = ui.resolution.value.split('x').map(Number);
       if (state.runtime) state.runtime.setViewport(w, h);
+    });
+    ui.flipY.addEventListener('change', () => {
+      if (state.runtime) state.runtime.setFlipY(ui.flipY.checked);
     });
     ui.resetParams.addEventListener('click', () => {
       resetParamValues();

@@ -177,22 +177,30 @@ export class CrtRuntime {
     this.passes = [];
     this.luts = new Map();
     this.original = null; // { source, width, height, isVideo, texture }
-    this.quad = this.makeQuad();
+    this.flipY = false;
+    this.warned = new Set();
+    this.quad = this.makeQuad(false);
+    this.quadFlipped = this.makeQuad(true);
   }
 
-  makeQuad() {
+  makeQuad(flipY) {
     // Position vec4 + TexCoord vec2, triangle strip.
     // Texture v=0 is the top image row (copyExternalImageToTexture convention),
     // NDC y=+1 is the top of the render target.
+    const y = flipY ? -1 : 1;
     const data = new Float32Array([
-      -1, +1, 0, 1, 0, 0,
-      +1, +1, 0, 1, 1, 0,
-      -1, -1, 0, 1, 0, 1,
-      +1, -1, 0, 1, 1, 1,
+      -1, +y, 0, 1, 0, 0,
+      +1, +y, 0, 1, 1, 0,
+      -1, -y, 0, 1, 0, 1,
+      +1, -y, 0, 1, 1, 1,
     ]);
     const buf = this.device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(buf, 0, data);
     return buf;
+  }
+
+  setFlipY(v) {
+    this.flipY = v;
   }
 
   sampler(filterLinear, wrapMode, mipmap) {
@@ -532,6 +540,10 @@ export class CrtRuntime {
       }
     }
     if (name in this.paramValues) return new Float32Array([this.paramValues[name]]);
+    if (!this.warned.has(name)) {
+      this.warned.add(name);
+      console.warn(`[crt] unresolved uniform member "${name}" (pass ${pass.index}); left as zero`);
+    }
     return null;
   }
 
@@ -569,7 +581,7 @@ export class CrtRuntime {
         colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
       });
       rp.setPipeline(p.pipeline);
-      rp.setVertexBuffer(0, this.quad);
+      rp.setVertexBuffer(0, p.isLast && this.flipY ? this.quadFlipped : this.quad);
       for (const bg of p.bindGroups) rp.setBindGroup(bg.index, bg.group);
       rp.draw(4);
       rp.end();
