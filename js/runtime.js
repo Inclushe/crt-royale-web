@@ -166,11 +166,24 @@ export class CrtRuntime {
     if (this.passes.length) this.layout();
   }
 
-  setViewport(w, h) {
-    this.viewport = { width: w, height: h };
+  // w, h: output (canvas) resolution. aspect: content aspect ratio as a
+  // number, or null to match the input. The chain renders into the largest
+  // aspect-correct rectangle centered in the canvas (letter/pillarboxed),
+  // exactly like RetroArch's viewport.
+  setViewport(w, h, aspect = this.viewport ? this.viewport.aspect : null) {
+    this.viewport = { width: w, height: h, aspect };
     this.canvas.width = w;
     this.canvas.height = h;
     if (this.passes.length && this.original) this.layout();
+  }
+
+  viewportRect() {
+    const { width: cw, height: ch, aspect } = this.viewport;
+    const ar = aspect ?? (this.original ? this.original.width / this.original.height : cw / ch);
+    let vw, vh;
+    if (cw / ch > ar) { vh = ch; vw = Math.round(ch * ar); }
+    else { vw = cw; vh = Math.round(cw / ar); }
+    return { x: Math.floor((cw - vw) / 2), y: Math.floor((ch - vh) / 2), width: vw, height: vh };
   }
 
   // Compute pass sizes, allocate intermediate framebuffers, set sampling
@@ -178,7 +191,7 @@ export class CrtRuntime {
   // declares for its input — RetroArch semantics).
   layout() {
     const gl = this.gl;
-    const vp = this.viewport;
+    const vp = this.vpRect = this.viewportRect();
     let srcW = this.original.width, srcH = this.original.height;
 
     for (const p of this.passes) {
@@ -344,7 +357,15 @@ export class CrtRuntime {
       }
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, p.isLast ? null : p.fbo);
-      gl.viewport(0, 0, p.outW, p.outH);
+      if (p.isLast) {
+        // letter/pillarbox: clear the whole canvas, draw into the viewport rect
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.viewport(this.vpRect.x, this.vpRect.y, this.vpRect.width, this.vpRect.height);
+      } else {
+        gl.viewport(0, 0, p.outW, p.outH);
+      }
       gl.useProgram(p.prog);
 
       for (const t of p.textureBinds) {

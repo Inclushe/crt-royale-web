@@ -115,7 +115,7 @@ async function loadPreset(presetPath) {
   const [w, h] = outputSize();
   ui.canvas.width = w;
   ui.canvas.height = h;
-  state.runtime.viewport = { width: w, height: h };
+  state.runtime.viewport = { width: w, height: h, aspect: contentAspect() };
   status('Compiling shaders (WebGL)…');
   await new Promise(r => setTimeout(r)); // let the status paint
   if (stale()) return;
@@ -125,7 +125,7 @@ async function loadPreset(presetPath) {
   const retried = new Set();
   for (;;) {
     try {
-      state.runtime.build(compiledPasses, preset.textures, lutBitmaps, { width: w, height: h });
+      state.runtime.build(compiledPasses, preset.textures, lutBitmaps, { width: w, height: h, aspect: contentAspect() });
       break;
     } catch (e) {
       const m = String(e.message).match(/^pass(\d+) /);
@@ -186,22 +186,19 @@ function applyFeed() {
 }
 
 function outputSize() {
-  const [, baseH] = ui.resolution.value.split('x').map(Number);
+  return ui.resolution.value.split('x').map(Number);
+}
+
+function contentAspect() {
   const a = ui.aspect.value;
-  let ratio;
-  if (a === 'source') {
-    const [fw, fh] = feedSize();
-    ratio = fw / fh;
-  } else {
-    const [an, ad] = a.split(':').map(Number);
-    ratio = an / ad;
-  }
-  return [Math.round(baseH * ratio / 2) * 2, baseH];
+  if (a === 'source') return null; // runtime matches the input's ratio
+  const [an, ad] = a.split(':').map(Number);
+  return an / ad;
 }
 
 function applyOutputSize() {
   const [w, h] = outputSize();
-  if (state.runtime) state.runtime.setViewport(w, h);
+  if (state.runtime) state.runtime.setViewport(w, h, contentAspect());
 }
 
 function resetParamValues() {
