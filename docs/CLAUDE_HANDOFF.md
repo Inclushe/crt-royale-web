@@ -201,16 +201,28 @@ mismatches) — always confirm changes in a real browser too.
 - `crt-royale-pal-r57shell` and `mame_hlsl` — use `##` token pasting *outside* a
   guarded ES3 alternative, so the `avoidGlEs` trick can't save them.
 
-### E2E — Playwright + headless Chromium (`/tmp/e2e/`, ephemeral)
-SwiftShader software GL: `chromium.launch({args:['--enable-unsafe-swiftshader','--use-angle=swiftshader']})`,
-context `{ ignoreHTTPSErrors:true }`. Serve with
-`python3 -m http.server 8123 --directory /home/user/crt-test`.
-- `run.mjs` — uploads a corner-marker test pattern (TL red / TR green / BL blue /
-  BR white), asserts corner colors through all 12 crt-royale passes + letterbox rect.
-- `multi.mjs` — loops many presets, checks each renders non-blank.
-- `ui.mjs` — mobile layout + actual-size (dpr=2) + centered scroll checks.
+### E2E — Playwright + headless Chromium (committed at `test/e2e/`)
+SwiftShader software GL (runs without a GPU). Each test starts its own static
+server rooted at the repo (no separate `http.server` needed) and exits non-zero
+on failure. See `test/e2e/README.md`.
+```sh
+cd test/e2e && npm install && npx playwright install chromium
+npm test            # all; or test:render / test:presets / test:ui / test:input
+# APP_URL=http://localhost:8000 npm test   # target an already-running server
+```
+- `helpers.mjs` — shared: built-in static server, browser launch (SwiftShader
+  args), corner-pattern PNG generator, `openApp`, `withApp` lifecycle wrapper.
+- `run.mjs` — uploads a corner-marker pattern (TL red / TR green / BL blue /
+  BR white), asserts corner colors through all 12 crt-royale passes + letterbox
+  rect; also asserts each corner's dominant channel.
+- `multi.mjs` — loops ~13 presets, polls for a non-blank frame each.
+  **crt-hyllian is currently skipped** (see §“open ideas”).
+- `ui.mjs` — mobile layout + actual-size (dpr=2) + centered scroll on `#canvasWrap`.
+- `inputres.mjs` — asserts feed dimensions for every input-resolution mode.
 - `window.__crt` (set in main.js) exposes `{runtime, feed, …}` for tests to read
   pass FBOs, uniforms, scroll, vpRect, etc.
+- The earlier one-off diagnostics (`errs*`, `debug-*`, `scroll*`, `dump-uniforms`)
+  were throwaway and not committed.
 
 **Verified rendering in real (SwiftShader) browser:** crt-royale (correct
 scanlines/mask/bloom/letterbox), crt-geom, lottes, easymode, aperture,
@@ -284,6 +296,12 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
 
 ## 11. Suggested next steps / open ideas
 
+- **crt-hyllian black-render bug:** renders fine standalone, but goes black when
+  loaded immediately after `crt-guest-dr-venom` (frames still advance,
+  `gl.isContextLost()` false, no shader error). Suspected leftover GL state not
+  reset between presets. Currently skipped in `multi.mjs`. Investigate
+  `CrtRuntime.build`/`layout` teardown (e.g. leftover bound state, attrib arrays,
+  or an FBO/texture from the previous preset).
 - Browser-verify the video transport + the latest Advanced-default change.
 - Consider PassFeedback/history if a target preset needs it.
 - The 2 `##` presets would need a real macro-expansion pass (expand function-like
