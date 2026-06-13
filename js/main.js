@@ -61,6 +61,7 @@ const ui = {
   advanced: document.getElementById('advanced'),
   canvas: document.getElementById('canvas'),
   fps: document.getElementById('fps'),
+  frameTime: document.getElementById('frameTime'),
 };
 
 function status(msg) {
@@ -534,9 +535,11 @@ function downloadImage() {
 
 let fpsFrames = 0;
 let fpsLast = performance.now();
+let cpuTimeSum = 0;
 
 function frame() {
   if (state.runtime && state.media) {
+    const t0 = performance.now();
     try {
       if (state.media.isVideo) drawFeed();
       state.runtime.render();
@@ -545,11 +548,18 @@ function frame() {
       state.running = false;
       throw e;
     }
+    cpuTimeSum += performance.now() - t0;
     fpsFrames++;
     const now = performance.now();
     if (now - fpsLast >= 500) {
       ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
+      // Prefer true GPU render time; fall back to CPU submit time (marked "~").
+      const gpu = state.runtime.lastGpuTimeMs;
+      ui.frameTime.textContent = gpu != null
+        ? `${gpu.toFixed(1)} ms`
+        : `~${(cpuTimeSum / fpsFrames).toFixed(1)} ms`;
       fpsFrames = 0;
+      cpuTimeSum = 0;
       fpsLast = now;
     }
   }

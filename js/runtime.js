@@ -70,6 +70,30 @@ export class CrtRuntime {
     ]), gl.STATIC_DRAW);
 
     this.identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
+    // Optional GPU timing: measures wall-clock time the GPU spends on the pass
+    // chain. Results arrive a few frames late (async), so we keep a small queue.
+    this.timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    this.gpuQueries = [];
+    this.lastGpuTimeMs = null; // most recent measured GPU frame time, or null
+  }
+
+  // Drain finished GPU timer queries into lastGpuTimeMs.
+  pollGpuQueries() {
+    const gl = this.gl, ext = this.timerExt;
+    if (!ext) return;
+    if (gl.getParameter(ext.GPU_DISJOINT_EXT)) { // timings invalid this interval
+      for (const q of this.gpuQueries) gl.deleteQuery(q);
+      this.gpuQueries.length = 0;
+      return;
+    }
+    while (this.gpuQueries.length) {
+      const q = this.gpuQueries[0];
+      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+      this.lastGpuTimeMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6; // ns -> ms
+      gl.deleteQuery(q);
+      this.gpuQueries.shift();
+    }
   }
 
   setFlipY(v) { this.flipY = v; }
@@ -427,6 +451,12 @@ export class CrtRuntime {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, this.original.source);
     }
 
+    let timerQuery = null;
+    if (this.timerExt && this.gpuQueries.length < 8) {
+      timerQuery = gl.createQuery();
+      gl.beginQuery(this.timerExt.TIME_ELAPSED_EXT, timerQuery);
+    }
+
     for (const p of this.passes) {
       // mipmaps for this pass's input, if requested (and not sRGB-stored)
       if (p.meta.mipmapInput && p.index > 0) {
@@ -475,6 +505,12 @@ export class CrtRuntime {
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       if (useScissor) gl.disable(gl.SCISSOR_TEST);
     }
+
+    if (timerQuery) {
+      gl.endQuery(this.timerExt.TIME_ELAPSED_EXT);
+      this.gpuQueries.push(timerQuery);
+    }
+    this.pollGpuQueries();
     this.frameCount++;
   }
 }
