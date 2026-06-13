@@ -37,6 +37,7 @@ const ui = {
   view: document.getElementById('view'),
   paramList: document.getElementById('paramList'),
   canvas: document.getElementById('canvas'),
+  fps: document.getElementById('fps'),
 };
 
 function status(msg) {
@@ -344,6 +345,9 @@ function downloadImage() {
   }, 'image/png');
 }
 
+let fpsFrames = 0;
+let fpsLast = performance.now();
+
 function frame() {
   if (state.runtime && state.media) {
     try {
@@ -353,6 +357,13 @@ function frame() {
       status('Render error: ' + e.message);
       state.running = false;
       throw e;
+    }
+    fpsFrames++;
+    const now = performance.now();
+    if (now - fpsLast >= 500) {
+      ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
+      fpsFrames = 0;
+      fpsLast = now;
     }
   }
   if (state.running) requestAnimationFrame(frame);
