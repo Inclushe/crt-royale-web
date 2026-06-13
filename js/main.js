@@ -86,7 +86,7 @@ const state = {
   presetOverrides: {},
   media: null, // { source, width, height, isVideo }
   running: false,
-  advanced: { interlaceDetect: false },
+  advanced: { interlaceDetect: true },
 };
 
 let loadGeneration = 0;
