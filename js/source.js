@@ -58,10 +58,16 @@ export function buildStageSource(source, stage /* 'VERTEX' | 'FRAGMENT' */, { es
   if (!hasVersion && /\b(fwidth|dFdx|dFdy)\s*\(/.test(source)) es3compat = true;
   const asEs3 = hasVersion || es3compat;
 
+  // The WebGL2 preprocessor has no `##` token pasting. Some shaders use it only
+  // inside a `#ifdef GL_ES` branch as a hand-unrolled alternative to an
+  // equivalent array/loop path guarded by the non-GL_ES branch (valid ES 3.00).
+  // Compiling with GL_ES undefined selects that path and avoids `##` entirely.
+  const avoidGlEs = asEs3 && /##/.test(source);
+
   const flattened = flattenConditionals(lines.join('\n'), {
     [stage]: 1,
     PARAMETER_UNIFORM: 1,
-    GL_ES: 1,
+    ...(avoidGlEs ? {} : { GL_ES: 1 }),
     GL_FRAGMENT_PRECISION_HIGH: 1,
     __VERSION__: asEs3 ? 300 : 100,
   });
