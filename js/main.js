@@ -27,6 +27,8 @@ const ui = {
   resolution: document.getElementById('resolution'),
   inputRes: document.getElementById('inputRes'),
   inputCustom: document.getElementById('inputCustom'),
+  crop: document.getElementById('crop'),
+  cropCustom: document.getElementById('cropCustom'),
   fit: document.getElementById('fit'),
   aspect: document.getElementById('aspect'),
   reload: document.getElementById('reload'),
@@ -156,9 +158,30 @@ async function loadPreset(presetPath) {
   status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
 }
 
+// Center-crop rectangle of the source media for the selected crop aspect.
+// Returns { sx, sy, sw, sh } in media pixels; full frame when crop is None.
+function sourceRect() {
+  const mw = state.media ? state.media.width : 320;
+  const mh = state.media ? state.media.height : 240;
+  const v = ui.crop.value;
+  let ar = null;
+  if (v === 'custom') {
+    const m = ui.cropCustom.value.match(/^\s*(\d*\.?\d+)\s*[:/xX]\s*(\d*\.?\d+)\s*$/);
+    if (m && +m[1] > 0 && +m[2] > 0) ar = +m[1] / +m[2];
+  } else if (v !== 'none') {
+    const [a, b] = v.split(':').map(Number);
+    ar = a / b;
+  }
+  if (!ar) return { sx: 0, sy: 0, sw: mw, sh: mh };
+  let sw = mw, sh = Math.round(mw / ar);
+  if (sh > mh) { sh = mh; sw = Math.round(mh * ar); }
+  return { sx: Math.floor((mw - sw) / 2), sy: Math.floor((mh - sh) / 2), sw, sh };
+}
+
 function feedSize() {
   const v = ui.inputRes.value;
-  const native = state.media ? [state.media.width, state.media.height] : [320, 240];
+  const rect = sourceRect();
+  const native = [rect.sw, rect.sh];
   const byFactor = (f) => (f > 0
     ? [Math.max(1, Math.round(native[0] / f)), Math.max(1, Math.round(native[1] / f))]
     : native);
@@ -201,16 +224,16 @@ function drawFeed() {
   const ctx = state.feed.getContext('2d');
   if (state.media.isVideo && state.media.source.readyState < 2) return;
   const fw = state.feed.width, fh = state.feed.height;
-  const mw = state.media.width, mh = state.media.height;
-  if (fitMode() === 'fit' && Math.abs(fw / fh - mw / mh) > 0.01) {
-    const scale = Math.min(fw / mw, fh / mh);
-    const dw = Math.max(1, Math.round(mw * scale));
-    const dh = Math.max(1, Math.round(mh * scale));
+  const { sx, sy, sw, sh } = sourceRect();
+  if (fitMode() === 'fit' && Math.abs(fw / fh - sw / sh) > 0.01) {
+    const scale = Math.min(fw / sw, fh / sh);
+    const dw = Math.max(1, Math.round(sw * scale));
+    const dh = Math.max(1, Math.round(sh * scale));
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, fw, fh);
-    ctx.drawImage(state.media.source, Math.floor((fw - dw) / 2), Math.floor((fh - dh) / 2), dw, dh);
+    ctx.drawImage(state.media.source, sx, sy, sw, sh, Math.floor((fw - dw) / 2), Math.floor((fh - dh) / 2), dw, dh);
   } else {
-    ctx.drawImage(state.media.source, 0, 0, fw, fh);
+    ctx.drawImage(state.media.source, sx, sy, sw, sh, 0, 0, fw, fh);
   }
 }
 
@@ -464,6 +487,12 @@ async function init() {
     ui.fit.addEventListener('change', () => {
       if (state.media) applyFeed();
     });
+    const onCropChange = () => {
+      ui.cropCustom.style.display = ui.crop.value === 'custom' ? '' : 'none';
+      if (state.media) { applyFeed(); applyOutputSize(); }
+    };
+    ui.crop.addEventListener('change', onCropChange);
+    ui.cropCustom.addEventListener('change', onCropChange);
     ui.inputRes.addEventListener('change', () => {
       updateInputCustomBox();
       if (state.media) { applyFeed(); applyOutputSize(); }
