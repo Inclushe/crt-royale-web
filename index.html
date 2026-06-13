@@ -49,8 +49,8 @@
     <option value="custom-res">Custom resolution…</option>
   </select><input type="text" id="inputCustom" size="7" style="display:none"></label>
   <label>Fit: <select id="fit">
-    <option value="auto" selected>Auto</option>
-    <option value="fit">Scale to fit</option>
+    <option value="auto">Auto</option>
+    <option value="fit" selected>Scale to fit</option>
     <option value="stretch">Stretch</option>
   </select></label>
   <label>Aspect: <select id="aspect">
@@ -64,7 +64,7 @@
     <option value="3840x2160">4K</option>
     <option value="1280x720">720p</option>
   </select></label>
-  <label><input type="checkbox" id="actualSize"> Actual size (1:1 pixels)</label>
+  <label><input type="checkbox" id="actualSize" checked> Actual size (1:1 pixels)</label>
   <label><input type="checkbox" id="flipY"> Flip vertical</label>
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
