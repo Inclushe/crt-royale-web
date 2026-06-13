@@ -34,6 +34,8 @@ const ui = {
   flipY: document.getElementById('flipY'),
   actualSize: document.getElementById('actualSize'),
   download: document.getElementById('download'),
+  fullscreen: document.getElementById('fullscreen'),
+  showControls: document.getElementById('showControls'),
   view: document.getElementById('view'),
   paramList: document.getElementById('paramList'),
   canvas: document.getElementById('canvas'),
@@ -418,6 +420,41 @@ async function init() {
       if (state.runtime) state.runtime.setParams(state.paramValues);
     });
     ui.download.addEventListener('click', downloadImage);
+
+    // Fullscreen: hide all controls, show just the canvas. A "Show controls"
+    // button appears on pointer activity and fades after a few seconds idle.
+    let hideTimer = null;
+    const flashControls = () => {
+      ui.showControls.classList.add('visible');
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => ui.showControls.classList.remove('visible'), 2500);
+    };
+    const enterFs = () => {
+      document.body.classList.add('fs');
+      if (ui.actualSize.checked) applyActualSize();
+      flashControls();
+    };
+    const exitFs = () => {
+      document.body.classList.remove('fs');
+      clearTimeout(hideTimer);
+      if (ui.actualSize.checked) applyActualSize();
+    };
+    ui.fullscreen.addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen?.().catch(() => {});
+      // Toggle the controls-hidden layout regardless of native fullscreen support.
+      if (document.body.classList.contains('fs')) exitFs(); else enterFs();
+    });
+    ui.showControls.addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      exitFs();
+    });
+    ui.view.addEventListener('mousemove', () => {
+      if (document.body.classList.contains('fs')) flashControls();
+    });
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && document.body.classList.contains('fs')) exitFs();
+    });
 
     state.running = true;
     requestAnimationFrame(frame);

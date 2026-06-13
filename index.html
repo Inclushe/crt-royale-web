@@ -29,6 +29,13 @@
     #view { min-height: 45vh; }
     #params { width: auto; max-height: 45vh; border-top: 1px solid #333; }
   }
+  /* fullscreen: only the canvas view is shown */
+  body.fs header, body.fs #status, body.fs #params { display: none; }
+  body.fs #content { flex-direction: row; }
+  #showControls { position: absolute; top: 10px; right: 10px; z-index: 10; display: none;
+    opacity: 0; transition: opacity 0.3s; }
+  body.fs #showControls { display: block; }
+  body.fs #showControls.visible { opacity: 1; }
 </style>
 </head>
 <body>
@@ -70,10 +77,11 @@
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
   <button id="download">Download image</button>
+  <button id="fullscreen">Fullscreen</button>
 </header>
 <div id="status"><span id="statusText">Loading…</span><span id="fps">– fps</span></div>
 <div id="content">
-  <div id="view"><canvas id="canvas" width="1920" height="1080"></canvas></div>
+  <div id="view"><canvas id="canvas" width="1920" height="1080"></canvas><button id="showControls">Show controls</button></div>
   <div id="params"><h3>Shader parameters</h3><div id="paramList"></div></div>
 </div>
 <script type="module" src="js/main.js"></script>
