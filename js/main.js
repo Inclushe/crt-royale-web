@@ -47,6 +47,7 @@ const ui = {
   vidMute: document.getElementById('vidMute'),
   vidVol: document.getElementById('vidVol'),
   paramList: document.getElementById('paramList'),
+  advanced: document.getElementById('advanced'),
   canvas: document.getElementById('canvas'),
   fps: document.getElementById('fps'),
 };
@@ -85,6 +86,7 @@ const state = {
   presetOverrides: {},
   media: null, // { source, width, height, isVideo }
   running: false,
+  advanced: { interlaceDetect: false },
 };
 
 let loadGeneration = 0;
@@ -98,12 +100,21 @@ async function loadPreset(presetPath) {
 
   const compiledPasses = [];
   const allParams = new Map();
+  let hasInterlacePass = false;
   for (const pass of preset.passes) {
     const shaderUrl = resolveUrl(presetUrl, pass.path);
     status(`Preparing pass ${pass.index + 1}/${preset.passes.length}: ${pass.path.split('/').pop()}…`);
-    const src = await state.loader.load(shaderUrl);
+    let src = await state.loader.load(shaderUrl);
     for (const p of parseParameterPragmas(src)) {
       if (!allParams.has(p.name)) allParams.set(p.name, p);
+    }
+    // Hot patch: crt-royale's vertical-interlacing pass forces interlace_detect
+    // on; expose it as an advanced toggle (default off).
+    if (/crt-royale-scanlines-vertical-interlacing\.glsl$/.test(pass.path)) {
+      hasInterlacePass = true;
+      if (!state.advanced.interlaceDetect) {
+        src = src.replace(/(\binterlace_detect\s*=\s*)true(\s*;)/, '$1false$2');
+      }
     }
     compiledPasses.push({
       meta: pass,
@@ -127,6 +138,7 @@ async function loadPreset(presetPath) {
   state.presetOverrides = preset.parameterOverrides;
   resetParamValues();
   buildParamUI();
+  buildAdvancedUI(hasInterlacePass);
 
   const [w, h] = outputSize();
   ui.canvas.width = w;
@@ -343,6 +355,28 @@ function buildParamUI() {
     div.append(label, range, val, reset);
     ui.paramList.append(div);
   }
+}
+
+// Advanced section: hot-patch toggles that aren't real #pragma parameters.
+// Shown only when the relevant pass is part of the loaded preset.
+function buildAdvancedUI(hasInterlacePass) {
+  ui.advanced.innerHTML = '';
+  if (!hasInterlacePass) return;
+  const h = document.createElement('h3');
+  h.textContent = 'Advanced';
+  const div = document.createElement('div');
+  div.className = 'param';
+  const label = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = state.advanced.interlaceDetect;
+  cb.addEventListener('change', () => {
+    state.advanced.interlaceDetect = cb.checked;
+    loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
+  });
+  label.append(cb, document.createTextNode(' Interlace detect (crt-royale)'));
+  div.append(label);
+  ui.advanced.append(h, div);
 }
 
 function fmtTime(t) {
