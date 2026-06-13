@@ -95,6 +95,29 @@
     <option value="3840x2160">4K</option>
     <option value="1280x720">720p</option>
   </select></label>
+  <label title="Show a small 1:1 crop of a high-resolution render (mask keeps its native pitch)"><input type="checkbox" id="miniMode"> Mini-TV</label>
+  <span id="miniControls" style="display:none">
+    <label>Reference: <select id="refRes">
+      <option value="1280x720">720p</option>
+      <option value="1920x1080">1080p</option>
+      <option value="2560x1440" selected>1440p</option>
+      <option value="3840x2160">4K</option>
+      <option value="5120x2880">5K</option>
+      <option value="custom-ref">Custom…</option>
+    </select><input type="text" id="refCustom" size="9" placeholder="WxH" style="display:none"></label>
+    <label>Window: <select id="windowSize">
+      <option value="192x144">192×144</option>
+      <option value="256x192">256×192</option>
+      <option value="320x240">320×240</option>
+      <option value="400x300">400×300</option>
+      <option value="480x360" selected>480×360</option>
+      <option value="640x480">640×480</option>
+      <option value="800x600">800×600</option>
+      <option value="custom-window">Custom…</option>
+    </select><input type="text" id="windowCustom" size="9" placeholder="WxH" style="display:none"></label>
+    <label>Pan X: <input type="range" id="winCenterX" min="0" max="1" step="0.01" value="0.5"></label>
+    <label>Pan Y: <input type="range" id="winCenterY" min="0" max="1" step="0.01" value="0.5"></label>
+  </span>
   <label><input type="checkbox" id="actualSize" checked> Actual size (1:1 pixels)</label>
   <label><input type="checkbox" id="flipY"> Flip vertical</label>
   <button id="reload">Reload shader</button>

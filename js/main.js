@@ -25,6 +25,14 @@ const ui = {
   file: document.getElementById('file'),
   preset: document.getElementById('preset'),
   resolution: document.getElementById('resolution'),
+  miniMode: document.getElementById('miniMode'),
+  miniControls: document.getElementById('miniControls'),
+  refRes: document.getElementById('refRes'),
+  refCustom: document.getElementById('refCustom'),
+  windowSize: document.getElementById('windowSize'),
+  windowCustom: document.getElementById('windowCustom'),
+  winCenterX: document.getElementById('winCenterX'),
+  winCenterY: document.getElementById('winCenterY'),
   inputRes: document.getElementById('inputRes'),
   inputCustom: document.getElementById('inputCustom'),
   crop: document.getElementById('crop'),
@@ -270,9 +278,55 @@ function contentAspect() {
   return an / ad;
 }
 
+function parseWH(s) {
+  const m = String(s).split(/[x×]/i).map(t => parseInt(t.trim(), 10));
+  return (m.length === 2 && m[0] > 0 && m[1] > 0) ? [m[0], m[1]] : null;
+}
+
+// Mini-TV mode: a small canvas shows a 1:1 crop of a high "reference" render so
+// the phosphor mask keeps its native pitch. null when the toggle is off.
+function miniEnabled() { return !!ui.miniMode.checked; }
+
+function refResolution() {
+  if (!miniEnabled()) return null;
+  const v = ui.refRes.value === 'custom-ref' ? ui.refCustom.value : ui.refRes.value;
+  return parseWH(v) || [2560, 1440];
+}
+
+function windowSize() {
+  const v = ui.windowSize.value === 'custom-window' ? ui.windowCustom.value : ui.windowSize.value;
+  return parseWH(v) || [480, 360];
+}
+
+function windowCenter() {
+  return [parseFloat(ui.winCenterX.value) || 0.5, parseFloat(ui.winCenterY.value) || 0.5];
+}
+
 function applyOutputSize() {
-  const [w, h] = outputSize();
-  if (state.runtime) state.runtime.setViewport(w, h, contentAspect());
+  if (!state.runtime) return;
+  const ref = refResolution();
+  if (!ref) {
+    const [w, h] = outputSize();
+    state.runtime.setViewport(w, h, contentAspect());
+    state.runtime.setWindow(null);
+  } else {
+    const aspect = contentAspect();
+    const [Vw, Vh] = ref;
+    const [W, H] = windowSize();
+    state.runtime.setViewport(W, H, aspect);
+    // Letterboxed content rect within the reference resolution.
+    const vr = state.runtime.letterbox(Vw, Vh, aspect);
+    const [cu, cv] = windowCenter();
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    // Crop origin (bottom-left) in virtual-canvas GL coords. Clamp to the content
+    // rect so panning can't reveal the black letterbox bars; if the window is
+    // larger than the content on an axis, center it (letterboxed result).
+    let cropX = Math.round(vr.x + cu * vr.width - W / 2);
+    let cropY = Math.round(vr.y + cv * vr.height - H / 2);
+    cropX = W <= vr.width ? clamp(cropX, vr.x, vr.x + vr.width - W) : Math.round(vr.x + (vr.width - W) / 2);
+    cropY = H <= vr.height ? clamp(cropY, vr.y, vr.y + vr.height - H) : Math.round(vr.y + (vr.height - H) / 2);
+    state.runtime.setWindow({ virtualW: Vw, virtualH: Vh, cropX, cropY });
+  }
   applyActualSize();
 }
 
@@ -516,6 +570,19 @@ async function init() {
       loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
     });
     ui.resolution.addEventListener('change', applyOutputSize);
+    const syncMiniControls = () => {
+      ui.miniControls.style.display = ui.miniMode.checked ? '' : 'none';
+      ui.refCustom.style.display = ui.refRes.value === 'custom-ref' ? '' : 'none';
+      ui.windowCustom.style.display = ui.windowSize.value === 'custom-window' ? '' : 'none';
+    };
+    ui.miniMode.addEventListener('change', () => { syncMiniControls(); applyOutputSize(); });
+    ui.refRes.addEventListener('change', () => { syncMiniControls(); applyOutputSize(); });
+    ui.refCustom.addEventListener('change', applyOutputSize);
+    ui.windowSize.addEventListener('change', () => { syncMiniControls(); applyOutputSize(); });
+    ui.windowCustom.addEventListener('change', applyOutputSize);
+    ui.winCenterX.addEventListener('input', applyOutputSize);
+    ui.winCenterY.addEventListener('input', applyOutputSize);
+    syncMiniControls();
     ui.aspect.addEventListener('change', () => {
       applyOutputSize();
       if (state.media) applyFeed(); // 'auto' fit mode depends on the aspect choice

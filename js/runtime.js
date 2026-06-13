@@ -41,6 +41,11 @@ export class CrtRuntime {
     this.paramValues = {};
     this.original = null; // { source, width, height, isVideo, texture }
     this.flipY = false;
+    // Mini-TV mode: render the viewport-scaled passes at a high "virtual"
+    // resolution (so the phosphor mask keeps its native pitch) while the actual
+    // canvas shows only a small window/crop of that virtual render. null = off.
+    this.virtual = null; // { width, height } of the virtual viewport, or null
+    this.crop = null;    // { x, y } bottom-left of the window in virtual-canvas GL coords
 
     // quad: VertexCoord.xy + TexCoord.xy (z, w default to 0, 1)
     this.quad = gl.createBuffer();
@@ -177,8 +182,31 @@ export class CrtRuntime {
     if (this.passes.length && this.original) this.layout();
   }
 
-  viewportRect() {
-    const { width: cw, height: ch, aspect } = this.viewport;
+  // Enable/disable mini-TV windowing. Pass null to disable (canvas is the full
+  // render, current behavior). When enabled, the viewport-scaled passes size off
+  // {virtualW, virtualH} and the final pass is clipped to the small canvas with
+  // its origin at virtual-canvas pixel (cropX, cropY).
+  setWindow(win) {
+    if (!win) {
+      this.virtual = null;
+      this.crop = null;
+    } else {
+      let { virtualW, virtualH } = win;
+      const max = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE);
+      if (virtualW > max || virtualH > max) {
+        console.warn(`[crt] mini-tv: virtual ${virtualW}x${virtualH} exceeds MAX_TEXTURE_SIZE ${max}; clamping`);
+        const s = Math.min(max / virtualW, max / virtualH);
+        virtualW = Math.floor(virtualW * s);
+        virtualH = Math.floor(virtualH * s);
+      }
+      this.virtual = { width: virtualW, height: virtualH };
+      this.crop = { x: Math.round(win.cropX) || 0, y: Math.round(win.cropY) || 0 };
+    }
+    if (this.passes.length && this.original) this.layout();
+  }
+
+  // Largest aspect-correct rect centered in a cw x ch area (letter/pillarbox).
+  letterbox(cw, ch, aspect) {
     const ar = aspect ?? (this.original ? this.original.width / this.original.height : cw / ch);
     let vw, vh;
     if (cw / ch > ar) { vh = ch; vw = Math.round(ch * ar); }
@@ -186,12 +214,31 @@ export class CrtRuntime {
     return { x: Math.floor((cw - vw) / 2), y: Math.floor((ch - vh) / 2), width: vw, height: vh };
   }
 
+  // Content rect within the actual canvas (used when windowing is off).
+  viewportRect() {
+    return this.letterbox(this.viewport.width, this.viewport.height, this.viewport.aspect);
+  }
+
+  // Content rect within the virtual viewport (equals viewportRect() when off).
+  // All viewport-scaled passes size off this so the mask is at virtual pitch.
+  virtualRect() {
+    const w = this.virtual ? this.virtual.width : this.viewport.width;
+    const h = this.virtual ? this.virtual.height : this.viewport.height;
+    return this.letterbox(w, h, this.viewport.aspect);
+  }
+
   // Compute pass sizes, allocate intermediate framebuffers, set sampling
   // parameters (the output of pass k is sampled with the settings pass k+1
   // declares for its input — RetroArch semantics).
   layout() {
     const gl = this.gl;
-    const vp = this.vpRect = this.viewportRect();
+    // Viewport-scaled passes + the forced last-pass size use the virtual content
+    // rect (= the canvas content rect when windowing is off). vpRect stays the
+    // content rect for back-compat; drawVpRect is what the final pass clips to.
+    const vp = this.virtualVpRect = this.vpRect = this.virtualRect();
+    this.drawVpRect = this.crop
+      ? { x: vp.x - this.crop.x, y: vp.y - this.crop.y, width: vp.width, height: vp.height }
+      : vp;
     let srcW = this.original.width, srcH = this.original.height;
 
     for (const p of this.passes) {
@@ -362,7 +409,8 @@ export class CrtRuntime {
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.viewport(this.vpRect.x, this.vpRect.y, this.vpRect.width, this.vpRect.height);
+        const dv = this.drawVpRect;
+        gl.viewport(dv.x, dv.y, dv.width, dv.height);
       } else {
         gl.viewport(0, 0, p.outW, p.outH);
       }
