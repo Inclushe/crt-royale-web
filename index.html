@@ -11,7 +11,8 @@
   select, button, input[type=file] { font-size: 13px; background:#2a2d35; color:#ddd; border:1px solid #444; border-radius:4px; padding:4px 6px; }
   #status { font-size: 12px; color: #9ad; padding: 4px 14px; min-height: 16px; white-space: pre-wrap; display: flex; justify-content: space-between; gap: 12px; }
   #content { display: flex; flex: 1; min-height: 0; }
-  #view { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; min-width: 0; position: relative; }
+  #view { flex: 1; background: #000; min-width: 0; position: relative; overflow: hidden; }
+  #canvasWrap { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
   #fps { font: 12px monospace; color: #9f9; flex: none; }
   canvas { max-width: 100%; max-height: 100%; image-rendering: auto; }
   #params { width: 320px; overflow-y: auto; background: #1b1d22; padding: 8px; font-size: 12px; }
@@ -24,8 +25,9 @@
   .param-reset:hover { color: #fff; }
   #params h3 { margin: 4px 0 8px; font-size: 13px; color:#9ad; }
   a { color: #9ad; }
-  /* actual-size mode: canvas at native device pixels, scrollable overflow */
-  #view.actual { overflow: auto; justify-content: flex-start; align-items: flex-start; }
+  /* actual-size mode: canvas at native device pixels; the inner wrapper
+     scrolls so floating controls (#vid, #showControls) stay over the view */
+  #view.actual #canvasWrap { overflow: auto; align-items: flex-start; justify-content: flex-start; }
   #view.actual canvas { max-width: none; max-height: none; margin: auto; }
   @media (max-width: 800px) {
     #content { flex-direction: column; }
@@ -102,7 +104,7 @@
 </header>
 <div id="status"><span id="statusText">Loading…</span><span id="fps">– fps</span></div>
 <div id="content">
-  <div id="view"><canvas id="canvas" width="1920" height="1080"></canvas><button id="showControls">Show controls</button>
+  <div id="view"><div id="canvasWrap"><canvas id="canvas" width="1920" height="1080"></canvas></div><button id="showControls">Show controls</button>
     <div id="vid">
       <button id="vidPlay" title="Play/Pause">▶</button>
       <input type="range" id="vidSeek" min="0" max="1000" value="0">

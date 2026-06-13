@@ -39,6 +39,7 @@ const ui = {
   fullscreen: document.getElementById('fullscreen'),
   showControls: document.getElementById('showControls'),
   view: document.getElementById('view'),
+  canvasWrap: document.getElementById('canvasWrap'),
   vid: document.getElementById('vid'),
   vidPlay: document.getElementById('vidPlay'),
   vidSeek: document.getElementById('vidSeek'),
@@ -266,17 +267,18 @@ function applyOutputSize() {
 // 1 canvas pixel == 1 device pixel (accounts for devicePixelRatio); overflow
 // scrolls and starts centered.
 function applyActualSize() {
+  const wrap = ui.canvasWrap;
   if (ui.actualSize.checked) {
     ui.view.classList.add('actual');
     const dpr = window.devicePixelRatio || 1;
     ui.canvas.style.width = (ui.canvas.width / dpr) + 'px';
     ui.canvas.style.height = (ui.canvas.height / dpr) + 'px';
     const center = (tries) => {
-      const tx = Math.max(0, (ui.view.scrollWidth - ui.view.clientWidth) / 2);
-      const ty = Math.max(0, (ui.view.scrollHeight - ui.view.clientHeight) / 2);
-      ui.view.scrollLeft = tx;
-      ui.view.scrollTop = ty;
-      if (tries > 0 && (Math.abs(ui.view.scrollLeft - tx) > 1 || Math.abs(ui.view.scrollTop - ty) > 1)) {
+      const tx = Math.max(0, (wrap.scrollWidth - wrap.clientWidth) / 2);
+      const ty = Math.max(0, (wrap.scrollHeight - wrap.clientHeight) / 2);
+      wrap.scrollLeft = tx;
+      wrap.scrollTop = ty;
+      if (tries > 0 && (Math.abs(wrap.scrollLeft - tx) > 1 || Math.abs(wrap.scrollTop - ty) > 1)) {
         setTimeout(() => center(tries - 1), 50);
       }
     };
