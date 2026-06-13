@@ -21,7 +21,7 @@ const FALLBACK_PRESETS = [
 ];
 
 const ui = {
-  status: document.getElementById('status'),
+  status: document.getElementById('statusText'),
   file: document.getElementById('file'),
   preset: document.getElementById('preset'),
   resolution: document.getElementById('resolution'),
