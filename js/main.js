@@ -259,11 +259,14 @@ function applyActualSize() {
   }
 }
 
+function paramDefault(p) {
+  return (p.name in state.presetOverrides) ? state.presetOverrides[p.name] : p.initial;
+}
+
 function resetParamValues() {
   state.paramValues = {};
   for (const p of state.parameters) {
-    state.paramValues[p.name] = (p.name in state.presetOverrides)
-      ? state.presetOverrides[p.name] : p.initial;
+    state.paramValues[p.name] = paramDefault(p);
   }
 }
 
@@ -293,12 +296,20 @@ function buildParamUI() {
     const val = document.createElement('span');
     val.className = 'val';
     val.textContent = fmt(range.value);
-    range.addEventListener('input', () => {
+    const apply = (v) => {
+      range.value = v;
       state.paramValues[p.name] = parseFloat(range.value);
       val.textContent = fmt(range.value);
       if (state.runtime) state.runtime.setParams(state.paramValues);
-    });
-    div.append(label, range, val);
+    };
+    range.addEventListener('input', () => apply(range.value));
+    const reset = document.createElement('button');
+    reset.className = 'param-reset';
+    reset.type = 'button';
+    reset.title = 'Reset to default';
+    reset.textContent = '↺';
+    reset.addEventListener('click', () => apply(paramDefault(p)));
+    div.append(label, range, val, reset);
     ui.paramList.append(div);
   }
 }
