@@ -39,6 +39,16 @@
     opacity: 0; transition: opacity 0.3s; }
   body.fs #showControls { display: block; }
   body.fs #showControls.visible { opacity: 1; }
+  /* video transport controls inside the view */
+  #vid { position: absolute; left: 0; right: 0; bottom: 0; display: none; align-items: center;
+    gap: 8px; padding: 8px 12px; background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    opacity: 0; transition: opacity 0.3s; z-index: 9; }
+  #vid.active { display: flex; }
+  #vid.active.visible { opacity: 1; }
+  #vid button { background: none; border: none; color: #fff; font-size: 16px; cursor: pointer; padding: 2px 4px; }
+  #vid #vidSeek { flex: 1; }
+  #vid #vidVol { width: 80px; }
+  #vid #vidTime { font: 12px monospace; color: #fff; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -84,7 +94,15 @@
 </header>
 <div id="status"><span id="statusText">Loading…</span><span id="fps">– fps</span></div>
 <div id="content">
-  <div id="view"><canvas id="canvas" width="1920" height="1080"></canvas><button id="showControls">Show controls</button></div>
+  <div id="view"><canvas id="canvas" width="1920" height="1080"></canvas><button id="showControls">Show controls</button>
+    <div id="vid">
+      <button id="vidPlay" title="Play/Pause">▶</button>
+      <input type="range" id="vidSeek" min="0" max="1000" value="0">
+      <span id="vidTime">0:00 / 0:00</span>
+      <button id="vidMute" title="Mute">🔊</button>
+      <input type="range" id="vidVol" min="0" max="1" step="0.01" value="1">
+    </div>
+  </div>
   <div id="params"><h3>Shader parameters</h3><div id="paramList"></div></div>
 </div>
 <script type="module" src="js/main.js"></script>

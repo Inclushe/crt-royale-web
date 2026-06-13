@@ -37,6 +37,12 @@ const ui = {
   fullscreen: document.getElementById('fullscreen'),
   showControls: document.getElementById('showControls'),
   view: document.getElementById('view'),
+  vid: document.getElementById('vid'),
+  vidPlay: document.getElementById('vidPlay'),
+  vidSeek: document.getElementById('vidSeek'),
+  vidTime: document.getElementById('vidTime'),
+  vidMute: document.getElementById('vidMute'),
+  vidVol: document.getElementById('vidVol'),
   paramList: document.getElementById('paramList'),
   canvas: document.getElementById('canvas'),
   fps: document.getElementById('fps'),
@@ -314,6 +320,51 @@ function buildParamUI() {
   }
 }
 
+function fmtTime(t) {
+  if (!isFinite(t)) t = 0;
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+let vidHideTimer = null;
+function flashVidControls() {
+  if (!ui.vid.classList.contains('active')) return;
+  ui.vid.classList.add('visible');
+  clearTimeout(vidHideTimer);
+  vidHideTimer = setTimeout(() => ui.vid.classList.remove('visible'), 2500);
+}
+
+function setupVideoControls(video) {
+  ui.vid.classList.add('active');
+  flashVidControls();
+  const syncPlay = () => { ui.vidPlay.textContent = video.paused ? '▶' : '⏸'; };
+  const syncMute = () => { ui.vidMute.textContent = (video.muted || video.volume === 0) ? '🔇' : '🔊'; };
+  syncPlay(); syncMute();
+  ui.vidVol.value = video.muted ? 0 : video.volume;
+
+  ui.vidPlay.onclick = () => { video.paused ? video.play() : video.pause(); };
+  video.onplay = syncPlay;
+  video.onpause = syncPlay;
+  video.ontimeupdate = () => {
+    if (video.duration) ui.vidSeek.value = (video.currentTime / video.duration) * 1000;
+    ui.vidTime.textContent = `${fmtTime(video.currentTime)} / ${fmtTime(video.duration)}`;
+  };
+  ui.vidSeek.oninput = () => {
+    if (video.duration) video.currentTime = (ui.vidSeek.value / 1000) * video.duration;
+  };
+  ui.vidMute.onclick = () => {
+    video.muted = !video.muted;
+    if (!video.muted && video.volume === 0) video.volume = 1;
+    ui.vidVol.value = video.muted ? 0 : video.volume;
+    syncMute();
+  };
+  ui.vidVol.oninput = () => {
+    video.volume = parseFloat(ui.vidVol.value);
+    video.muted = video.volume === 0;
+    syncMute();
+  };
+}
+
 async function onFile(file) {
   if (!file) return;
   if (state.media && state.media.isVideo) {
@@ -330,9 +381,11 @@ async function onFile(file) {
       else video.addEventListener('loadedmetadata', res, { once: true });
     });
     state.media = { source: video, width: video.videoWidth, height: video.videoHeight, isVideo: true };
+    setupVideoControls(video);
   } else {
     const bmp = await createImageBitmap(file);
     state.media = { source: bmp, width: bmp.width, height: bmp.height, isVideo: false };
+    ui.vid.classList.remove('active', 'visible');
   }
   if (state.runtime && state.runtime.passes.length) {
     applyFeed();
@@ -462,7 +515,14 @@ async function init() {
     });
     ui.view.addEventListener('mousemove', () => {
       if (document.body.classList.contains('fs')) flashControls();
+      flashVidControls();
     });
+    // Keep transport controls visible while the pointer is over them.
+    ui.vid.addEventListener('mouseenter', () => {
+      ui.vid.classList.add('visible');
+      clearTimeout(vidHideTimer);
+    });
+    ui.vid.addEventListener('mouseleave', flashVidControls);
     document.addEventListener('fullscreenchange', () => {
       if (!document.fullscreenElement && document.body.classList.contains('fs')) exitFs();
     });
