@@ -117,6 +117,11 @@
     </select><input type="text" id="windowCustom" size="9" placeholder="WxH" style="display:none"></label>
     <label>Pan X: <input type="range" id="winCenterX" min="0" max="1" step="0.01" value="0.5"></label>
     <label>Pan Y: <input type="range" id="winCenterY" min="0" max="1" step="0.01" value="0.5"></label>
+    <label title="Region shades only the window (+margin) in the heavy passes: faster, may be approximate at the very edges under extreme curvature">Render: <select id="renderMode">
+      <option value="exact" selected>Exact</option>
+      <option value="region">Region (faster)</option>
+    </select></label>
+    <label id="regionMarginLabel" style="display:none">Margin: <input type="range" id="regionMargin" min="0.02" max="0.3" step="0.01" value="0.1"></label>
   </span>
   <label><input type="checkbox" id="actualSize" checked> Actual size (1:1 pixels)</label>
   <label><input type="checkbox" id="flipY"> Flip vertical</label>

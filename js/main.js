@@ -33,6 +33,9 @@ const ui = {
   windowCustom: document.getElementById('windowCustom'),
   winCenterX: document.getElementById('winCenterX'),
   winCenterY: document.getElementById('winCenterY'),
+  renderMode: document.getElementById('renderMode'),
+  regionMargin: document.getElementById('regionMargin'),
+  regionMarginLabel: document.getElementById('regionMarginLabel'),
   inputRes: document.getElementById('inputRes'),
   inputCustom: document.getElementById('inputCustom'),
   crop: document.getElementById('crop'),
@@ -302,6 +305,9 @@ function windowCenter() {
   return [parseFloat(ui.winCenterX.value) || 0.5, parseFloat(ui.winCenterY.value) || 0.5];
 }
 
+function regionMode() { return ui.renderMode.value === 'region'; }
+function regionMargin() { return parseFloat(ui.regionMargin.value) || 0.1; }
+
 function applyOutputSize() {
   if (!state.runtime) return;
   const ref = refResolution();
@@ -309,6 +315,7 @@ function applyOutputSize() {
     const [w, h] = outputSize();
     state.runtime.setViewport(w, h, contentAspect());
     state.runtime.setWindow(null);
+    state.runtime.setRegionMode(false);
   } else {
     const aspect = contentAspect();
     const [Vw, Vh] = ref;
@@ -326,6 +333,7 @@ function applyOutputSize() {
     cropX = W <= vr.width ? clamp(cropX, vr.x, vr.x + vr.width - W) : Math.round(vr.x + (vr.width - W) / 2);
     cropY = H <= vr.height ? clamp(cropY, vr.y, vr.y + vr.height - H) : Math.round(vr.y + (vr.height - H) / 2);
     state.runtime.setWindow({ virtualW: Vw, virtualH: Vh, cropX, cropY });
+    state.runtime.setRegionMode(regionMode(), regionMargin());
   }
   applyActualSize();
 }
@@ -574,6 +582,7 @@ async function init() {
       ui.miniControls.style.display = ui.miniMode.checked ? '' : 'none';
       ui.refCustom.style.display = ui.refRes.value === 'custom-ref' ? '' : 'none';
       ui.windowCustom.style.display = ui.windowSize.value === 'custom-window' ? '' : 'none';
+      ui.regionMarginLabel.style.display = ui.renderMode.value === 'region' ? '' : 'none';
     };
     ui.miniMode.addEventListener('change', () => { syncMiniControls(); applyOutputSize(); });
     ui.refRes.addEventListener('change', () => { syncMiniControls(); applyOutputSize(); });
@@ -582,6 +591,8 @@ async function init() {
     ui.windowCustom.addEventListener('change', applyOutputSize);
     ui.winCenterX.addEventListener('input', applyOutputSize);
     ui.winCenterY.addEventListener('input', applyOutputSize);
+    ui.renderMode.addEventListener('change', () => { syncMiniControls(); applyOutputSize(); });
+    ui.regionMargin.addEventListener('input', applyOutputSize);
     syncMiniControls();
     ui.aspect.addEventListener('change', () => {
       applyOutputSize();

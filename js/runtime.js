@@ -46,6 +46,10 @@ export class CrtRuntime {
     // canvas shows only a small window/crop of that virtual render. null = off.
     this.virtual = null; // { width, height } of the virtual viewport, or null
     this.crop = null;    // { x, y } bottom-left of the window in virtual-canvas GL coords
+    // Region-only ("fast") rendering: scissor the heavy full-virtual passes to the
+    // window's footprint + a margin, so only the visible pixels are shaded.
+    this.regionMode = false;
+    this.regionMargin = 0.10; // fraction of the virtual content rect, per side
 
     // quad: VertexCoord.xy + TexCoord.xy (z, w default to 0, 1)
     this.quad = gl.createBuffer();
@@ -205,6 +209,14 @@ export class CrtRuntime {
     if (this.passes.length && this.original) this.layout();
   }
 
+  // Enable/disable region-only rendering (only meaningful while a window is set).
+  // margin is the per-side ROI expansion as a fraction of the virtual content rect.
+  setRegionMode(on, margin = this.regionMargin) {
+    this.regionMode = !!on;
+    this.regionMargin = margin;
+    if (this.passes.length && this.original) this.layout();
+  }
+
   // Largest aspect-correct rect centered in a cw x ch area (letter/pillarbox).
   letterbox(cw, ch, aspect) {
     const ar = aspect ?? (this.original ? this.original.width / this.original.height : cw / ch);
@@ -254,6 +266,7 @@ export class CrtRuntime {
       p.inW = srcW; p.inH = srcH;
       p.outW = p.isLast ? vp.width : dim(m.scaleTypeX, m.scaleX, srcW, vp.width);
       p.outH = p.isLast ? vp.height : dim(m.scaleTypeY, m.scaleY, srcH, vp.height);
+      p.roi = null;
 
       if (!p.isLast) {
         if (p.texture) gl.deleteTexture(p.texture);
@@ -278,6 +291,27 @@ export class CrtRuntime {
         const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
         if (status !== gl.FRAMEBUFFER_COMPLETE) {
           throw new Error(`pass${p.index}: framebuffer incomplete (0x${status.toString(16)})`);
+        }
+        // Region-only: scissor this pass to the window footprint + margin when it
+        // is a full-virtual pass (both axes viewport) and its output is not
+        // mipmapped (generateMipmap would average stale non-ROI pixels).
+        const bothViewport = m.scaleTypeX === 'viewport' && m.scaleTypeY === 'viewport';
+        if (this.regionMode && this.crop && bothViewport && !needsMips) {
+          const W = this.canvas.width, H = this.canvas.height;
+          const mg = Math.max(Math.round(this.regionMargin * Math.max(vp.width, vp.height)), 48);
+          const cx = (v) => Math.max(0, Math.min(p.outW, v));
+          const cy = (v) => Math.max(0, Math.min(p.outH, v));
+          // crop is in virtual-canvas coords; these viewport passes are sized to
+          // the content rect, so shift by the content-rect origin (vp.x/vp.y).
+          const ox = this.crop.x - vp.x, oy = this.crop.y - vp.y;
+          const x = cx(ox - mg), y = cy(oy - mg);
+          const right = cx(ox + W + mg), top = cy(oy + H + mg);
+          p.roi = { x, y, w: right - x, h: top - y };
+          // Clear the freshly-allocated FBO once so non-ROI texels never hold NaN
+          // (float bloom buffers) that could leak through bilinear taps at the edge.
+          gl.viewport(0, 0, p.outW, p.outH);
+          gl.clearColor(0, 0, 0, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
         }
       }
       srcW = p.outW; srcH = p.outH;
@@ -414,6 +448,11 @@ export class CrtRuntime {
       } else {
         gl.viewport(0, 0, p.outW, p.outH);
       }
+      const useScissor = this.regionMode && p.roi && !p.isLast;
+      if (useScissor) {
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(p.roi.x, p.roi.y, p.roi.w, p.roi.h);
+      }
       gl.useProgram(p.prog);
 
       for (const t of p.textureBinds) {
@@ -434,6 +473,7 @@ export class CrtRuntime {
       gl.enableVertexAttribArray(1);
       gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      if (useScissor) gl.disable(gl.SCISSOR_TEST);
     }
     this.frameCount++;
   }
