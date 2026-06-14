@@ -61,19 +61,20 @@
   <strong>CRT slang shaders</strong>
   <label>Media: <input type="file" id="file" accept="image/*,video/*"></label>
   <label>Shader: <select id="preset"></select></label>
-  <label>Input: <select id="inputRes">
-    <option value="native">Native (1×)</option>
-    <option value="/2">Downscale 2×</option>
-    <option value="/3">Downscale 3×</option>
-    <option value="/4">Downscale 4×</option>
-    <option value="custom-scale">Downscale custom…</option>
-    <option value="256x240">256×240 (NES)</option>
-    <option value="256x224">256×224 (SNES)</option>
-    <option value="320x224">320×224 (Genesis)</option>
-    <option value="320x240" selected>320×240 (PS1 / 240p)</option>
-    <option value="640x480">640×480 (480p)</option>
-    <option value="custom-res">Custom resolution…</option>
-  </select><input type="text" id="inputCustom" size="7" style="display:none"></label>
+  <label title="Vertical input resolution = number of CRT scanlines. crt-royale auto-interlaces past ~288 lines.">Lines: <select id="inputLines">
+    <option value="source">Source</option>
+    <option value="224">224</option>
+    <option value="240" selected>240</option>
+    <option value="480">480 (interlaced)</option>
+    <option value="custom">Custom…</option>
+  </select><input type="text" id="inputLinesCustom" size="4" placeholder="e.g. 240" style="display:none"></label>
+  <label title="Horizontal input resolution = source detail. Higher removes blockiness; does not change the triad count.">Horizontal: <select id="inputWidth">
+    <option value="source" selected>Source</option>
+    <option value="256">256</option>
+    <option value="320">320</option>
+    <option value="640">640</option>
+    <option value="custom">Custom…</option>
+  </select><input type="text" id="inputWidthCustom" size="4" placeholder="e.g. 320" style="display:none"></label>
   <label>Crop: <select id="crop">
     <option value="none" selected>None</option>
     <option value="4:3">4:3</option>

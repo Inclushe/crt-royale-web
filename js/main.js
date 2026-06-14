@@ -39,8 +39,10 @@ const ui = {
   renderMode: document.getElementById('renderMode'),
   regionMargin: document.getElementById('regionMargin'),
   regionMarginLabel: document.getElementById('regionMarginLabel'),
-  inputRes: document.getElementById('inputRes'),
-  inputCustom: document.getElementById('inputCustom'),
+  inputLines: document.getElementById('inputLines'),
+  inputLinesCustom: document.getElementById('inputLinesCustom'),
+  inputWidth: document.getElementById('inputWidth'),
+  inputWidthCustom: document.getElementById('inputWidthCustom'),
   crop: document.getElementById('crop'),
   cropCustom: document.getElementById('cropCustom'),
   fit: document.getElementById('fit'),
@@ -233,31 +235,31 @@ function sourceRect() {
   return { sx: Math.floor((mw - sw) / 2), sy: Math.floor((mh - sh) / 2), sw, sh };
 }
 
+// The input resolution is split into two independent axes: horizontal
+// resolution (source detail) and lines (vertical resolution = CRT scanline
+// count). Each axis is 'source' (match the media), a fixed value, or custom.
+function axisSize(sel, customEl, nativeVal) {
+  const v = sel.value;
+  if (v === 'source') return nativeVal;
+  const n = parseInt(v === 'custom' ? customEl.value : v, 10);
+  return n > 0 ? n : nativeVal;
+}
+
 function feedSize() {
-  const v = ui.inputRes.value;
   const rect = sourceRect();
   const native = [rect.sw, rect.sh];
-  const byFactor = (f) => (f > 0
-    ? [Math.max(1, Math.round(native[0] / f)), Math.max(1, Math.round(native[1] / f))]
-    : native);
-  if (v === 'native' || !state.media) return native;
-  if (v.startsWith('/')) return byFactor(parseFloat(v.slice(1)));
-  if (v === 'custom-scale') return byFactor(parseFloat(ui.inputCustom.value));
-  if (v === 'custom-res') {
-    const m = ui.inputCustom.value.match(/^\s*(\d+)\s*[xX*,]\s*(\d+)\s*$/);
-    return m ? [Math.max(1, +m[1]), Math.max(1, +m[2])] : native;
-  }
-  const [w, h] = v.split('x').map(Number);
-  return [w, h];
+  if (!state.media) return native;
+  return [
+    Math.max(1, axisSize(ui.inputWidth, ui.inputWidthCustom, native[0])),
+    Math.max(1, axisSize(ui.inputLines, ui.inputLinesCustom, native[1])),
+  ];
 }
 
 function updateInputCustomBox() {
-  const v = ui.inputRes.value;
-  const custom = v === 'custom-scale' || v === 'custom-res';
-  ui.inputCustom.style.display = custom ? '' : 'none';
-  if (custom) {
-    ui.inputCustom.placeholder = v === 'custom-scale' ? 'e.g. 2.5' : 'e.g. 320x240';
-    ui.inputCustom.focus();
+  for (const [sel, custom] of [[ui.inputWidth, ui.inputWidthCustom], [ui.inputLines, ui.inputLinesCustom]]) {
+    const on = sel.value === 'custom';
+    custom.style.display = on ? '' : 'none';
+    if (on) custom.focus();
   }
 }
 
@@ -270,7 +272,7 @@ function updateInputCustomBox() {
 function fitMode() {
   const v = ui.fit.value;
   if (v !== 'auto') return v;
-  const isPresetRes = /^\d+x\d+$/.test(ui.inputRes.value);
+  const isPresetRes = ui.inputWidth.value !== 'source' || ui.inputLines.value !== 'source';
   return (isPresetRes && ui.aspect.value === 'source') ? 'fit' : 'stretch';
 }
 
@@ -660,13 +662,14 @@ async function init() {
     };
     ui.crop.addEventListener('change', onCropChange);
     ui.cropCustom.addEventListener('change', onCropChange);
-    ui.inputRes.addEventListener('change', () => {
+    const onInputChange = () => {
       updateInputCustomBox();
       if (state.media) { applyFeed(); applyOutputSize(); }
-    });
-    ui.inputCustom.addEventListener('change', () => {
-      if (state.media) { applyFeed(); applyOutputSize(); }
-    });
+    };
+    ui.inputWidth.addEventListener('change', onInputChange);
+    ui.inputLines.addEventListener('change', onInputChange);
+    ui.inputWidthCustom.addEventListener('change', onInputChange);
+    ui.inputLinesCustom.addEventListener('change', onInputChange);
     ui.flipY.addEventListener('change', () => {
       if (state.runtime) state.runtime.setFlipY(ui.flipY.checked);
       requestRender();
