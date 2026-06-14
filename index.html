@@ -63,16 +63,16 @@
   <label>Shader: <select id="preset"></select></label>
   <label title="Vertical input resolution = number of CRT scanlines. crt-royale auto-interlaces past ~288 lines.">Lines: <select id="inputLines">
     <option value="source">Source</option>
-    <option value="224">224</option>
-    <option value="240" selected>240</option>
+    <option value="224">224 (SNES/Genesis)</option>
+    <option value="240" selected>240 (NES/PS1)</option>
     <option value="480">480 (interlaced)</option>
     <option value="custom">Custom…</option>
   </select><input type="text" id="inputLinesCustom" size="4" placeholder="e.g. 240" style="display:none"></label>
   <label title="Horizontal input resolution = source detail. Higher removes blockiness; does not change the triad count.">Horizontal: <select id="inputWidth">
     <option value="source" selected>Source</option>
-    <option value="256">256</option>
-    <option value="320">320</option>
-    <option value="640">640</option>
+    <option value="256">256 (NES/SNES)</option>
+    <option value="320">320 (Genesis/PS1)</option>
+    <option value="640">640 (480p)</option>
     <option value="custom">Custom…</option>
   </select><input type="text" id="inputWidthCustom" size="4" placeholder="e.g. 320" style="display:none"></label>
   <label>Crop: <select id="crop">

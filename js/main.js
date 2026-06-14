@@ -282,10 +282,16 @@ function drawFeed() {
   if (state.media.isVideo && state.media.source.readyState < 2) return;
   const fw = state.feed.width, fh = state.feed.height;
   const { sx, sy, sw, sh } = sourceRect();
-  if (fitMode() === 'fit' && Math.abs(fw / fh - sw / sh) > 0.01) {
-    const scale = Math.min(fw / sw, fh / sh);
-    const dw = Math.max(1, Math.round(sw * scale));
-    const dh = Math.max(1, Math.round(sh * scale));
+  // The feed grid (fw x fh) is anamorphic — its rows are scanlines and its
+  // columns are detail, so its aspect is not a display aspect. "Scale to fit"
+  // letterboxes the source (aspect S) inside the OUTPUT display aspect (D), then
+  // maps that to feed pixels; when D == S there are no bars (just fill).
+  const S = sw / sh;
+  const D = contentAspect() || S;
+  if (fitMode() === 'fit' && Math.abs(S - D) > 0.01) {
+    let dw, dh;
+    if (S >= D) { dw = fw; dh = Math.max(1, Math.round(fh * D / S)); }
+    else { dh = fh; dw = Math.max(1, Math.round(fw * S / D)); }
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, fw, fh);
     ctx.drawImage(state.media.source, sx, sy, sw, sh, Math.floor((fw - dw) / 2), Math.floor((fh - dh) / 2), dw, dh);
@@ -310,7 +316,12 @@ function outputSize() {
 
 function contentAspect() {
   const a = ui.aspect.value;
-  if (a === 'source') return null; // runtime matches the input's ratio
+  if (a === 'source') {
+    // Match the source media's own aspect, NOT the (possibly anamorphic) feed
+    // grid — Lines/Horizontal are independent, so the feed aspect is meaningless.
+    const { sw, sh } = sourceRect();
+    return sw / sh;
+  }
   const [an, ad] = a.split(':').map(Number);
   return an / ad;
 }
