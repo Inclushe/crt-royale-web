@@ -37,6 +37,8 @@
     #content { flex-direction: column; }
     #view { min-height: 45vh; }
     #params { width: auto; max-height: 45vh; border-top: 1px solid #333; }
+    /* stack the status: message on top, meters (frame time / gpu / fps) below */
+    #status { flex-direction: column; align-items: flex-start; gap: 4px; }
   }
   /* fullscreen: only the canvas view is shown */
   body.fs header, body.fs #status, body.fs #params { display: none; }
