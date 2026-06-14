@@ -43,6 +43,7 @@ const code = await withApp(async ({ browser, url }) => {
     const set = (id, v) => { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('change')); };
     set('refRes', '2560x1440');
     set('windowSize', '480x360');
+    set('renderMode', 'exact'); // window.mjs covers exact mode; region.mjs covers region
     const cb = document.getElementById('miniMode');
     cb.checked = true; cb.dispatchEvent(new Event('change'));
     const cx = document.getElementById('winCenterX'); cx.value = '0.5'; cx.dispatchEvent(new Event('input'));

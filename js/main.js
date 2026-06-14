@@ -130,13 +130,25 @@ async function loadPreset(presetPath) {
   status(`Fetching preset ${presetPath}…`);
   const preset = parsePreset(await fetchText(presetUrl));
 
+  // Kick off every dependency download at once (GitHub rate-limits per hour, so
+  // parallel is fine) — pass shaders and LUT textures — then process results.
+  // SourceLoader.load caches the in-flight promise, so this is safe / dedups URLs.
+  status(`Fetching ${preset.passes.length} shader passes…`);
+  const shaderSrcs = preset.passes.map(pass => state.loader.load(resolveUrl(presetUrl, pass.path)));
+  const lutPromises = preset.textures.filter(t => t.path).map(async t => {
+    const blob = await (await fetch(resolveUrl(presetUrl, t.path))).blob();
+    return { name: t.name, bitmap: await createImageBitmap(blob, { imageOrientation: 'flipY' }) };
+  });
+
+  // Process shaders in pass order (keeps the param list and first-wins dedup
+  // deterministic); the downloads above already run concurrently.
   const compiledPasses = [];
   const allParams = new Map();
   let hasInterlacePass = false;
-  for (const pass of preset.passes) {
-    const shaderUrl = resolveUrl(presetUrl, pass.path);
+  for (let i = 0; i < preset.passes.length; i++) {
+    const pass = preset.passes[i];
+    let src = await shaderSrcs[i];
     status(`Preparing pass ${pass.index + 1}/${preset.passes.length}: ${pass.path.split('/').pop()}…`);
-    let src = await state.loader.load(shaderUrl);
     for (const p of parseParameterPragmas(src)) {
       if (!allParams.has(p.name)) allParams.set(p.name, p);
     }
@@ -158,12 +170,7 @@ async function loadPreset(presetPath) {
 
   status('Fetching LUT textures…');
   const lutBitmaps = new Map();
-  for (const t of preset.textures) {
-    if (!t.path) continue;
-    const url = resolveUrl(presetUrl, t.path);
-    const blob = await (await fetch(url)).blob();
-    lutBitmaps.set(t.name, await createImageBitmap(blob, { imageOrientation: 'flipY' }));
-  }
+  for (const { name, bitmap } of await Promise.all(lutPromises)) lutBitmaps.set(name, bitmap);
 
   if (stale()) return;
   state.parameters = [...allParams.values()];
