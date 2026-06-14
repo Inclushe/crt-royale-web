@@ -62,6 +62,7 @@ const ui = {
   canvas: document.getElementById('canvas'),
   fps: document.getElementById('fps'),
   frameTime: document.getElementById('frameTime'),
+  gpuTime: document.getElementById('gpuTime'),
 };
 
 function status(msg) {
@@ -533,6 +534,7 @@ function downloadImage() {
   }, 'image/png');
 }
 
+const METER_INTERVAL_MS = 200; // how often the fps / frame-time readouts refresh
 let fpsFrames = 0;
 let fpsLast = performance.now();
 let cpuTimeSum = 0;
@@ -548,16 +550,16 @@ function frame() {
       state.running = false;
       throw e;
     }
+    // CPU main-thread time to submit the frame (matches DevTools' main track).
     cpuTimeSum += performance.now() - t0;
     fpsFrames++;
     const now = performance.now();
-    if (now - fpsLast >= 500) {
+    if (now - fpsLast >= METER_INTERVAL_MS) {
       ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
-      // Prefer true GPU render time; fall back to CPU submit time (marked "~").
+      ui.frameTime.textContent = `${(cpuTimeSum / fpsFrames).toFixed(2)} ms`;
+      // GPU execution time (async); shown separately when the timer ext resolves.
       const gpu = state.runtime.lastGpuTimeMs;
-      ui.frameTime.textContent = gpu != null
-        ? `${gpu.toFixed(1)} ms`
-        : `~${(cpuTimeSum / fpsFrames).toFixed(1)} ms`;
+      ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
       fpsFrames = 0;
       cpuTimeSum = 0;
       fpsLast = now;
