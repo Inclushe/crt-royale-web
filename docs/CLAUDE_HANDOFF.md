@@ -356,7 +356,11 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
   pragma initial).
 - **Meters** (`#meters`, right of `#status`, refresh 200ms): `#frameTime` CPU submit ms
   (`performance.now()`), `#gpuTime` GPU ms (`EXT_disjoint_timer_query`), `#fps`. fps reads `0` when
-  idle in on-demand mode. See §5A.
+  idle in on-demand mode. See §5A. Two **live sparklines** (`#gpuGraph`/`#fpsGraph`, `drawSparkline()`
+  in main.js) plot **unsmoothed per-frame** GPU time and instantaneous fps (1000/frame-interval) so
+  jitter the 200ms averages hide is visible. GPU samples come from a new `runtime.gpuTimeHistory` ring
+  buffer (filled in `pollGpuQueries`); fps samples from a `fpsHistory` ring in main.js (reset on idle
+  resume). fps graph draws a faint 60-fps baseline. Empty on SwiftShader (GPU queries never resolve).
 - **Video transport** (`#vid`, only for videos): play/pause, seek + `m:ss / m:ss`,
   mute, volume. Rounded translucent panel floating over `#view`, inset 12px sides /
   18px bottom (clear of the scrollbar). Fades after 2.5s idle; stays while hovered.

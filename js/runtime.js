@@ -81,6 +81,9 @@ export class CrtRuntime {
     this.timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
     this.gpuQueries = [];
     this.lastGpuTimeMs = null; // most recent measured GPU frame time, or null
+    // Ring buffer of recent per-query GPU times (ms) for the live sparkline.
+    this.gpuTimeHistory = [];
+    this.gpuHistoryCap = 180;
   }
 
   // Drain finished GPU timer queries into lastGpuTimeMs.
@@ -96,6 +99,8 @@ export class CrtRuntime {
       const q = this.gpuQueries[0];
       if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
       this.lastGpuTimeMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6; // ns -> ms
+      this.gpuTimeHistory.push(this.lastGpuTimeMs);
+      if (this.gpuTimeHistory.length > this.gpuHistoryCap) this.gpuTimeHistory.shift();
       gl.deleteQuery(q);
       this.gpuQueries.shift();
     }

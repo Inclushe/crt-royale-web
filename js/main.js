@@ -70,6 +70,8 @@ const ui = {
   fps: document.getElementById('fps'),
   frameTime: document.getElementById('frameTime'),
   gpuTime: document.getElementById('gpuTime'),
+  gpuGraph: document.getElementById('gpuGraph'),
+  fpsGraph: document.getElementById('fpsGraph'),
 };
 
 function status(msg) {
@@ -582,6 +584,49 @@ const METER_INTERVAL_MS = 200; // how often the fps / frame-time readouts refres
 let fpsFrames = 0;
 let fpsLast = performance.now();
 let cpuTimeSum = 0;
+// Unsmoothed per-frame history for the live sparklines (GPU history lives on the runtime).
+const GRAPH_CAP = 180;
+const fpsHistory = [];
+let lastFrameTs = null;
+
+// Draw a min/max-autoscaled sparkline of `data` into a small canvas, plus a faint
+// marker line at `target` (e.g. 60 fps / a budget) so spikes read against a baseline.
+function drawSparkline(canvas, data, color, { target } = {}) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.width;
+  const cssH = canvas.clientHeight || canvas.height;
+  if (canvas.width !== Math.round(cssW * dpr)) canvas.width = Math.round(cssW * dpr);
+  if (canvas.height !== Math.round(cssH * dpr)) canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height, pad = Math.round(2 * dpr);
+  ctx.clearRect(0, 0, w, h);
+  if (!data || data.length < 2) return;
+  let lo = Infinity, hi = -Infinity;
+  for (const v of data) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (target != null) { lo = Math.min(lo, target); hi = Math.max(hi, target); }
+  if (hi - lo < 1e-6) hi = lo + 1; // avoid div0 on a flat line
+  const span = hi - lo;
+  const y = (v) => h - pad - (v - lo) / span * (h - 2 * pad);
+  const n = data.length;
+  const x = (i) => (n > 1 ? (i / (n - 1)) * (w - 2 * pad) + pad : pad);
+  if (target != null) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = dpr;
+    ctx.beginPath();
+    ctx.moveTo(pad, y(target));
+    ctx.lineTo(w - pad, y(target));
+    ctx.stroke();
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, dpr);
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const px = x(i), py = y(data[i]);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+}
 
 function frame() {
   if (state.runtime && state.media) {
@@ -600,11 +645,22 @@ function frame() {
       }
       state.needsRender = false;
       // CPU main-thread time to submit the frame (matches DevTools' main track).
-      cpuTimeSum += performance.now() - t0;
+      const tEnd = performance.now();
+      cpuTimeSum += tEnd - t0;
       fpsFrames++;
+      // Unsmoothed instantaneous fps from the frame-to-frame interval.
+      if (lastFrameTs != null) {
+        const dt = tEnd - lastFrameTs;
+        if (dt > 0) {
+          fpsHistory.push(1000 / dt);
+          if (fpsHistory.length > GRAPH_CAP) fpsHistory.shift();
+        }
+      }
+      lastFrameTs = tEnd;
     } else {
       // Idle: still drain GPU timer queries so the queue never wedges.
       state.runtime.pollGpuQueries();
+      lastFrameTs = null; // don't count the idle gap as one slow frame on resume
     }
     const now = performance.now();
     if (now - fpsLast >= METER_INTERVAL_MS) {
@@ -614,6 +670,8 @@ function frame() {
         const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
         ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
       }
+      drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
+      drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
       fpsFrames = 0;
       cpuTimeSum = 0;
       fpsLast = now;

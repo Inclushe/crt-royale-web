@@ -16,7 +16,8 @@
   #fps { font: 12px monospace; color: #9f9; flex: none; }
   #frameTime { font: 12px monospace; color: #fc9; flex: none; }
   #gpuTime { font: 12px monospace; color: #c9f; flex: none; }
-  #meters { display: flex; gap: 12px; flex: none; }
+  #meters { display: flex; gap: 12px; flex: none; align-items: center; }
+  .meterGraph { width: 96px; height: 22px; background: #0d0e11; border: 1px solid #2a2d35; border-radius: 3px; vertical-align: middle; }
   canvas { max-width: 100%; max-height: 100%; image-rendering: auto; }
   #params { width: 320px; overflow-y: auto; background: #1b1d22; padding: 8px; font-size: 12px; }
   .param { margin-bottom: 6px; }
@@ -136,7 +137,7 @@
   <button id="download">Download image</button>
   <button id="fullscreen">Fullscreen</button>
 </header>
-<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameTime" title="CPU time on the main thread to submit the frame (performance.now)">– ms</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><span id="fps">– fps</span></span></div>
+<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameTime" title="CPU time on the main thread to submit the frame (performance.now)">– ms</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas></span></div>
 <div id="content">
   <div id="view"><div id="canvasWrap"><canvas id="canvas" width="1920" height="1080"></canvas></div><button id="showControls">Show controls</button>
     <div id="vid">
