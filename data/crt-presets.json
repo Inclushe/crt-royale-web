@@ -1,0 +1,233 @@
+[
+  {
+    "name": "CRT-beam.glslp"
+  },
+  {
+    "name": "GritsScanlines.glslp"
+  },
+  {
+    "name": "crt-1tap.glslp"
+  },
+  {
+    "name": "crt-Cyclon.glslp"
+  },
+  {
+    "name": "crt-aperture.glslp"
+  },
+  {
+    "name": "crt-blurPi-soft.glslp"
+  },
+  {
+    "name": "crt-blurPi.glslp"
+  },
+  {
+    "name": "crt-caligari.glslp"
+  },
+  {
+    "name": "crt-cgwg-fast.glslp"
+  },
+  {
+    "name": "crt-consumer-1w-ntsc.glslp"
+  },
+  {
+    "name": "crt-consumer-arcade.glslp"
+  },
+  {
+    "name": "crt-consumer-classic.glslp"
+  },
+  {
+    "name": "crt-consumer.glslp"
+  },
+  {
+    "name": "crt-easymode-halation.glslp"
+  },
+  {
+    "name": "crt-easymode.glslp"
+  },
+  {
+    "name": "crt-gdv-mini.glslp"
+  },
+  {
+    "name": "crt-geom-mini.glslp"
+  },
+  {
+    "name": "crt-geom.glslp"
+  },
+  {
+    "name": "crt-guest-dr-venom-fast.glslp"
+  },
+  {
+    "name": "crt-guest-dr-venom.glslp"
+  },
+  {
+    "name": "crt-guest-sm.glslp"
+  },
+  {
+    "name": "crt-hyllian-3d.glslp"
+  },
+  {
+    "name": "crt-hyllian-fast.glslp"
+  },
+  {
+    "name": "crt-hyllian-glow.glslp"
+  },
+  {
+    "name": "crt-hyllian-multipass.glslp"
+  },
+  {
+    "name": "crt-hyllian.glslp"
+  },
+  {
+    "name": "crt-interlaced-halation.glslp"
+  },
+  {
+    "name": "crt-lottes-fast.glslp"
+  },
+  {
+    "name": "crt-lottes-mini.glslp"
+  },
+  {
+    "name": "crt-lottes-multipass.glslp"
+  },
+  {
+    "name": "crt-lottes.glslp"
+  },
+  {
+    "name": "crt-mattias.glslp"
+  },
+  {
+    "name": "crt-nes-mini.glslp"
+  },
+  {
+    "name": "crt-nobody.glslp"
+  },
+  {
+    "name": "crt-pi-vertical.glslp"
+  },
+  {
+    "name": "crt-pi.glslp"
+  },
+  {
+    "name": "crt-potato-BVM.glslp"
+  },
+  {
+    "name": "crt-potato-cool.glslp"
+  },
+  {
+    "name": "crt-potato-warm.glslp"
+  },
+  {
+    "name": "crt-royale-fake-bloom-intel.glslp"
+  },
+  {
+    "name": "crt-royale-fake-bloom.glslp"
+  },
+  {
+    "name": "crt-royale-ntsc-256px-composite.glslp"
+  },
+  {
+    "name": "crt-royale-ntsc-256px-svideo.glslp"
+  },
+  {
+    "name": "crt-royale-ntsc-320px-composite.glslp"
+  },
+  {
+    "name": "crt-royale-ntsc-320px-svideo.glslp"
+  },
+  {
+    "name": "crt-royale-pal-r57shell.glslp"
+  },
+  {
+    "name": "crt-royale.glslp"
+  },
+  {
+    "name": "crt-sines.glslp"
+  },
+  {
+    "name": "crt-torridgristle.glslp"
+  },
+  {
+    "name": "crt-yo6-KV-M1420B-fast.glslp"
+  },
+  {
+    "name": "crt-yo6-KV-M1420B-sharp.glslp"
+  },
+  {
+    "name": "crt-yo6-KV-M1420B.glslp"
+  },
+  {
+    "name": "crtglow_gauss.glslp"
+  },
+  {
+    "name": "crtglow_gauss_ntsc_3phase.glslp"
+  },
+  {
+    "name": "crtglow_lanczos.glslp"
+  },
+  {
+    "name": "crtsim.glslp"
+  },
+  {
+    "name": "fake-CRT-Geom-potato.glslp"
+  },
+  {
+    "name": "fake-CRT-Geom.glslp"
+  },
+  {
+    "name": "fakelottes-geom-mini.glslp"
+  },
+  {
+    "name": "fakelottes-geom.glslp"
+  },
+  {
+    "name": "fakelottes.glslp"
+  },
+  {
+    "name": "gizmo-crt.glslp"
+  },
+  {
+    "name": "gizmo-slotmask-crt.glslp"
+  },
+  {
+    "name": "gtuv50.glslp"
+  },
+  {
+    "name": "mame_hlsl.glslp"
+  },
+  {
+    "name": "metacrt.glslp"
+  },
+  {
+    "name": "phosphorlut.glslp"
+  },
+  {
+    "name": "smuberstep-glow.glslp"
+  },
+  {
+    "name": "tvout-tweaks-linearized-multipass.glslp"
+  },
+  {
+    "name": "yee64.glslp"
+  },
+  {
+    "name": "yeetron.glslp"
+  },
+  {
+    "name": "zfast-composite.glslp"
+  },
+  {
+    "name": "zfast-crt.glslp"
+  },
+  {
+    "name": "zfast_crt_geo.glslp"
+  },
+  {
+    "name": "zfast_crt_geo_svideo.glslp"
+  },
+  {
+    "name": "zfast_crt_nogeo.glslp"
+  },
+  {
+    "name": "zfast_crt_nogeo_svideo.glslp"
+  }
+]

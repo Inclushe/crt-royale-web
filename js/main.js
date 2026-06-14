@@ -7,7 +7,10 @@ import { SourceLoader, buildStageSource, parseParameterPragmas, resolveUrl } fro
 import { CrtRuntime } from './runtime.js';
 
 const RAW_BASE = 'https://raw.githubusercontent.com/libretro/glsl-shaders/master/';
-const API_LIST = 'https://api.github.com/repos/libretro/glsl-shaders/contents/crt';
+// Snapshot of the libretro/glsl-shaders `crt` directory listing, stored in the
+// repo (data/crt-presets.json) so the app doesn't hit the GitHub API (rate
+// limited) on every load. Regenerate with scripts/update-crt-presets.mjs.
+const PRESET_LIST = new URL('../data/crt-presets.json', import.meta.url).href;
 const FALLBACK_PRESETS = [
   'crt/crt-royale.glslp',
   'crt/crt-royale-fake-bloom.glslp',
@@ -80,11 +83,11 @@ async function fetchText(url) {
 
 async function listPresets() {
   try {
-    const r = await fetch(API_LIST);
-    if (!r.ok) throw new Error('rate limited');
+    const r = await fetch(PRESET_LIST);
+    if (!r.ok) throw new Error('preset list unavailable');
     const entries = await r.json();
     const presets = entries
-      .filter(e => e.type === 'file' && e.name.endsWith('.glslp'))
+      .filter(e => e.name.endsWith('.glslp'))
       .map(e => `crt/${e.name}`);
     return presets.length ? presets : FALLBACK_PRESETS;
   } catch {
