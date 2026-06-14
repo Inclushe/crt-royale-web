@@ -308,7 +308,7 @@ function windowCenter() {
 }
 
 function regionMode() { return ui.renderMode.value === 'region'; }
-function regionMargin() { return parseFloat(ui.regionMargin.value) || 0.1; }
+function regionMargin() { const v = parseFloat(ui.regionMargin.value); return isNaN(v) ? 0 : v; }
 
 function applyOutputSize() {
   if (!state.runtime) return;

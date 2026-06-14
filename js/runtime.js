@@ -49,7 +49,7 @@ export class CrtRuntime {
     // Region-only ("fast") rendering: scissor the heavy full-virtual passes to the
     // window's footprint + a margin, so only the visible pixels are shaded.
     this.regionMode = false;
-    this.regionMargin = 0.10; // fraction of the virtual content rect, per side
+    this.regionMargin = 0; // fraction of the virtual content rect, per side
 
     // quad: VertexCoord.xy + TexCoord.xy (z, w default to 0, 1)
     this.quad = gl.createBuffer();
@@ -322,7 +322,7 @@ export class CrtRuntime {
         const bothViewport = m.scaleTypeX === 'viewport' && m.scaleTypeY === 'viewport';
         if (this.regionMode && this.crop && bothViewport && !needsMips) {
           const W = this.canvas.width, H = this.canvas.height;
-          const mg = Math.max(Math.round(this.regionMargin * Math.max(vp.width, vp.height)), 48);
+          const mg = Math.max(0, Math.round(this.regionMargin * Math.max(vp.width, vp.height)));
           const cx = (v) => Math.max(0, Math.min(p.outW, v));
           const cy = (v) => Math.max(0, Math.min(p.outH, v));
           // crop is in virtual-canvas coords; these viewport passes are sized to
