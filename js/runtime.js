@@ -12,6 +12,11 @@ const WRAP_MODE = {
   mirrored_repeat: 'MIRRORED_REPEAT',
 };
 
+// Region mode: extra per-side margin (virtual px) added to every scissored pass's
+// ROI, covering cumulative cross-pass sampling reach (curvature/AA + blur kernels +
+// scanline/misconvergence) so the visible window matches the full render exactly.
+const REGION_PASS_MARGIN = 32;
+
 function compileShader(gl, type, source, label) {
   const sh = gl.createShader(type);
   gl.shaderSource(sh, source);
@@ -316,20 +321,25 @@ export class CrtRuntime {
         if (status !== gl.FRAMEBUFFER_COMPLETE) {
           throw new Error(`pass${p.index}: framebuffer incomplete (0x${status.toString(16)})`);
         }
-        // Region-only: scissor this pass to the window footprint + margin when it
-        // is a full-virtual pass (both axes viewport) and its output is not
-        // mipmapped (generateMipmap would average stale non-ROI pixels).
-        const bothViewport = m.scaleTypeX === 'viewport' && m.scaleTypeY === 'viewport';
-        if (this.regionMode && this.crop && bothViewport && !needsMips) {
+        // Region-only: scissor this pass to the window footprint + margin. Per
+        // axis, scissor iff that axis is content-rect-aligned (output dim equals
+        // the virtual content rect dim) — selects the window-aligned passes (1 on
+        // Y only; 7,8,9,10 on both) and skips the mask tiles / small source passes.
+        // Skip if the output is mipmapped (generateMipmap averages stale texels).
+        const sx = p.outW === vp.width;  // X axis aligned to the content rect
+        const sy = p.outH === vp.height; // Y axis aligned to the content rect
+        if (this.regionMode && this.crop && (sx || sy) && !needsMips) {
           const W = this.canvas.width, H = this.canvas.height;
-          const mg = Math.max(0, Math.round(this.regionMargin * Math.max(vp.width, vp.height)));
+          const mg = Math.round(this.regionMargin * Math.max(vp.width, vp.height)) + REGION_PASS_MARGIN;
           const cx = (v) => Math.max(0, Math.min(p.outW, v));
           const cy = (v) => Math.max(0, Math.min(p.outH, v));
-          // crop is in virtual-canvas coords; these viewport passes are sized to
-          // the content rect, so shift by the content-rect origin (vp.x/vp.y).
+          // crop is in virtual-canvas coords; aligned passes are sized to the
+          // content rect, so shift by the content-rect origin (vp.x/vp.y).
           const ox = this.crop.x - vp.x, oy = this.crop.y - vp.y;
-          const x = cx(ox - mg), y = cy(oy - mg);
-          const right = cx(ox + W + mg), top = cy(oy + H + mg);
+          const x = sx ? cx(ox - mg) : 0;
+          const right = sx ? cx(ox + W + mg) : p.outW;
+          const y = sy ? cy(oy - mg) : 0;
+          const top = sy ? cy(oy + H + mg) : p.outH;
           p.roi = { x, y, w: right - x, h: top - y };
           // Clear the freshly-allocated FBO once so non-ROI texels never hold NaN
           // (float bloom buffers) that could leak through bilinear taps at the edge.

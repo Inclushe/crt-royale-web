@@ -45,6 +45,8 @@ const ui = {
   reload: document.getElementById('reload'),
   resetParams: document.getElementById('resetParams'),
   flipY: document.getElementById('flipY'),
+  onDemand: document.getElementById('onDemand'),
+  halation: document.getElementById('halation'),
   actualSize: document.getElementById('actualSize'),
   download: document.getElementById('download'),
   fullscreen: document.getElementById('fullscreen'),
@@ -99,8 +101,25 @@ const state = {
   presetOverrides: {},
   media: null, // { source, width, height, isVideo }
   running: false,
+  needsRender: true, // on-demand: render the next frame (start dirty)
   advanced: { interlaceDetect: true },
 };
+
+// On-demand rendering: mark the scene dirty so the loop renders one frame. Video
+// always renders; for a static image we render only when something changes.
+function requestRender() { state.needsRender = true; }
+function onDemandEnabled() { return ui.onDemand ? ui.onDemand.checked : true; }
+function glowEnabled() { return ui.halation ? ui.halation.checked : true; }
+
+// Push parameters to the runtime, applying the glow (halation/diffusion) toggle,
+// and request a render.
+function applyParams() {
+  if (!state.runtime) return;
+  const values = { ...state.paramValues };
+  if (!glowEnabled()) { values.halation_weight = 0; values.diffusion_weight = 0; }
+  state.runtime.setParams(values);
+  requestRender();
+}
 
 let loadGeneration = 0;
 
@@ -178,7 +197,7 @@ async function loadPreset(presetPath) {
       compiledPasses[k].fragmentSrc = buildStageSource(compiledPasses[k].rawSrc, 'FRAGMENT', { es3compat: true });
     }
   }
-  state.runtime.setParams(state.paramValues);
+  applyParams();
   if (state.media) applyFeed();
   applyActualSize();
   status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
@@ -270,6 +289,7 @@ function applyFeed() {
   state.feed.height = h;
   drawFeed();
   state.runtime.setOriginal(state.feed, w, h, state.media.isVideo);
+  requestRender();
 }
 
 function outputSize() {
@@ -338,6 +358,7 @@ function applyOutputSize() {
     state.runtime.setRegionMode(regionMode(), regionMargin());
   }
   applyActualSize();
+  requestRender();
 }
 
 // 1 canvas pixel == 1 device pixel (accounts for devicePixelRatio); overflow
@@ -407,7 +428,7 @@ function buildParamUI() {
       range.value = v;
       state.paramValues[p.name] = parseFloat(range.value);
       val.textContent = fmt(range.value);
-      if (state.runtime) state.runtime.setParams(state.paramValues);
+      applyParams();
     };
     range.addEventListener('input', () => apply(range.value));
     const reset = document.createElement('button');
@@ -541,25 +562,35 @@ let cpuTimeSum = 0;
 
 function frame() {
   if (state.runtime && state.media) {
-    const t0 = performance.now();
-    try {
-      if (state.media.isVideo) drawFeed();
-      state.runtime.render();
-    } catch (e) {
-      status('Render error: ' + e.message);
-      state.running = false;
-      throw e;
+    // On-demand: video always renders; a static image only when marked dirty.
+    const isVideo = state.media.isVideo;
+    const shouldRender = isVideo || !onDemandEnabled() || state.needsRender;
+    if (shouldRender) {
+      const t0 = performance.now();
+      try {
+        if (isVideo) drawFeed();
+        state.runtime.render();
+      } catch (e) {
+        status('Render error: ' + e.message);
+        state.running = false;
+        throw e;
+      }
+      state.needsRender = false;
+      // CPU main-thread time to submit the frame (matches DevTools' main track).
+      cpuTimeSum += performance.now() - t0;
+      fpsFrames++;
+    } else {
+      // Idle: still drain GPU timer queries so the queue never wedges.
+      state.runtime.pollGpuQueries();
     }
-    // CPU main-thread time to submit the frame (matches DevTools' main track).
-    cpuTimeSum += performance.now() - t0;
-    fpsFrames++;
     const now = performance.now();
     if (now - fpsLast >= METER_INTERVAL_MS) {
       ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
-      ui.frameTime.textContent = `${(cpuTimeSum / fpsFrames).toFixed(2)} ms`;
-      // GPU execution time (async); shown separately when the timer ext resolves.
-      const gpu = state.runtime.lastGpuTimeMs;
-      ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
+      if (fpsFrames > 0) {
+        ui.frameTime.textContent = `${(cpuTimeSum / fpsFrames).toFixed(2)} ms`;
+        const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
+        ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
+      }
       fpsFrames = 0;
       cpuTimeSum = 0;
       fpsLast = now;
@@ -628,7 +659,10 @@ async function init() {
     });
     ui.flipY.addEventListener('change', () => {
       if (state.runtime) state.runtime.setFlipY(ui.flipY.checked);
+      requestRender();
     });
+    ui.onDemand.addEventListener('change', requestRender);
+    ui.halation.addEventListener('change', applyParams);
     ui.actualSize.addEventListener('change', applyActualSize);
     window.addEventListener('resize', () => {
       if (ui.actualSize.checked) applyActualSize();
@@ -636,7 +670,7 @@ async function init() {
     ui.resetParams.addEventListener('click', () => {
       resetParamValues();
       buildParamUI();
-      if (state.runtime) state.runtime.setParams(state.paramValues);
+      applyParams();
     });
     ui.download.addEventListener('click', downloadImage);
 

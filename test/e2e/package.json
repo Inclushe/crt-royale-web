@@ -4,13 +4,14 @@
   "type": "module",
   "description": "Browser e2e tests for the CRT shader web app (Playwright + headless Chromium / SwiftShader)",
   "scripts": {
-    "test": "node run.mjs && node multi.mjs && node ui.mjs && node inputres.mjs && node window.mjs && node region.mjs",
+    "test": "node run.mjs && node multi.mjs && node ui.mjs && node inputres.mjs && node window.mjs && node region.mjs && node ondemand.mjs",
     "test:render": "node run.mjs",
     "test:presets": "node multi.mjs",
     "test:ui": "node ui.mjs",
     "test:input": "node inputres.mjs",
     "test:window": "node window.mjs",
-    "test:region": "node region.mjs"
+    "test:region": "node region.mjs",
+    "test:ondemand": "node ondemand.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.0"

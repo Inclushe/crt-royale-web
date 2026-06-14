@@ -80,7 +80,7 @@ const code = await withApp(async ({ browser, url }) => {
 
   // Region mode must actually scissor passes, and match the exact crop everywhere
   // (margins cover the sampling footprints). Differences are only sRGB rounding.
-  const caseOk = (r) => r.samples > 1000 && r.oob === 0 && r.regionScissored >= 2 && r.meanDiff < 2 && r.maxDiff <= 16;
+  const caseOk = (r) => r.samples > 1000 && r.oob === 0 && r.regionScissored >= 4 && r.meanDiff < 2 && r.maxDiff <= 16;
   const ok = center.smallSize[0] === 480 && center.smallSize[1] === 360 && caseOk(center) && caseOk(edge);
   if (!ok) console.log('FAIL detail:', JSON.stringify({ center: caseOk(center), edge: caseOk(edge) }));
   return ok;
