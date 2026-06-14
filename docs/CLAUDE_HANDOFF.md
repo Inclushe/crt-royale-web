@@ -1,11 +1,19 @@
 # Claude Handoff — CRT libretro shaders on the web
 
 A handoff doc for whoever (Claude or human) picks this up next. Written to be
-read cold. Last updated at commit `1f396e9`.
+read cold. Last updated at commit `2f5ea15`.
 
 - **Repo:** `inclushe/crt-test`
-- **Working branch:** `claude/slang-shaders-web-jm5hp2` (everything committed + pushed here; `main` is not used)
+- **Working branch:** `claude/mini-tv-mode` (everything committed + pushed here; `main` is not used)
 - **Type:** static client-side web app, no build step, no dependencies. Plain ES modules + WebGL2.
+
+> **Recent session (Mini-TV + perf + input split)** — see §5A for the engine details, §8 for the controls.
+> Headlines: a **Mini-TV mode** (small canvas showing a 1:1 crop of a high-reference-resolution
+> render, so the phosphor mask keeps its native pitch), a **Region "fast" render** that scissors the
+> heavy passes to the visible window, **on-demand rendering** (idle static images cost ~0 GPU),
+> **CPU + GPU frame-time meters**, the **GitHub API list replaced by a committed snapshot**
+> (`data/crt-presets.json`), and the **Input control split into independent Lines (scanlines) and
+> Horizontal (detail) axes**.
 
 ---
 
@@ -45,8 +53,9 @@ into a path that was **abandoned**, and the abandoned artifacts still exist in `
 **Implication:** Do NOT reintroduce slang-wasm / WGSL. The `/tmp/slang/*` build
 trees (slang-build, emsdk, wasm, native, glsl-repo) are scratch and **not part of
 the repo**. `/tmp/slang/glsl-repo` is a handy sparse clone of `libretro/glsl-shaders`
-used by the offline validator (see §7); `/tmp/e2e/` holds the Playwright harness.
-Both are ephemeral (`/tmp` is wiped when the container recycles) — re-clone if gone.
+used by the offline validator (see §7). The Playwright **e2e harness is now committed** at
+`test/e2e/` (was previously a scratch `/tmp/e2e/`). `/tmp/slang/glsl-repo` is ephemeral
+(`/tmp` is wiped when the container recycles) — re-clone `libretro/glsl-shaders` if gone.
 
 ---
 
@@ -70,9 +79,15 @@ WebGL2 multi-pass render               js/runtime.js  (CrtRuntime)
 ```
 
 GitHub endpoints (in `main.js`):
-- `RAW_BASE = https://raw.githubusercontent.com/libretro/glsl-shaders/master/`
-- `API_LIST = https://api.github.com/repos/libretro/glsl-shaders/contents/crt`
-  (used to populate the preset dropdown; falls back to a hardcoded list on 403/rate-limit)
+- `RAW_BASE = https://raw.githubusercontent.com/libretro/glsl-shaders/master/` — shader/LUT fetches.
+- **Preset dropdown is now a committed snapshot**, `PRESET_LIST = data/crt-presets.json` (fetched via
+  `import.meta.url`), NOT the live GitHub API — the API's 60/hr unauthenticated limit was exhausting
+  on shared/CI IPs. `listPresets()` reads the JSON (array of `{name}` for each `.glslp`), still falls
+  back to the hardcoded `FALLBACK_PRESETS` on error. Regenerate the snapshot with
+  `node scripts/update-crt-presets.mjs` (honors `GITHUB_TOKEN`).
+- **Dependency fetches are parallel:** `loadPreset()` kicks off all pass `.glsl` + LUT `.png`
+  downloads at once (then processes shaders in pass order for deterministic param dedup). The
+  `SourceLoader` cache stores the in-flight promise, so concurrent loads are safe and dedup URLs.
 
 ---
 
@@ -80,12 +95,14 @@ GitHub endpoints (in `main.js`):
 
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `index.html` | ~120 | DOM + all CSS. Header controls, `#status` (with `#fps`), `#view`>`#canvasWrap`>`#canvas` + floating `#vid`/`#showControls`, `#params`>`#advanced`+`#paramList`. |
+| `index.html` | ~154 | DOM + all CSS. Header controls (incl. Mini-TV + Lines/Horizontal), `#status` (with `#frameTime`/`#gpuTime`/`#fps` in `#meters`), `#view`>`#canvasWrap`>`#canvas` + floating `#vid`/`#showControls`, `#params`>`#advanced`+`#paramList`. |
 | `js/slangp.js` | ~100 | `parsePreset(text)` → `{passes, textures, parameterOverrides}`. **Named slangp but parses `.glslp`** (identical key/value format). Handles `scale_type[_x/_y]`, `scale[_x/_y]`, `filter_linear`, `wrap_mode`, `srgb_framebuffer`, `float_framebuffer`, `mipmap_input`, `alias`, `frame_count_mod`, `textures` + per-LUT `_linear/_wrap_mode/_mipmap`. Leftover numeric keys → `parameterOverrides`. |
-| `js/source.js` | ~117 | `buildStageSource(src, stage, {es3compat})`, `parseParameterPragmas(src)`, `SourceLoader` (URL fetch+cache), `resolveUrl`. |
+| `js/source.js` | ~117 | `buildStageSource(src, stage, {es3compat})`, `parseParameterPragmas(src)`, `SourceLoader` (URL fetch+**promise**-cache), `resolveUrl`. |
 | `js/flatten.js` | ~436 | Preprocessor + ES-compat transforms (see §5). |
-| `js/runtime.js` | ~392 | `CrtRuntime` WebGL2 engine (see §5). |
-| `js/main.js` | ~606 | UI wiring, preset orchestration, hot patch, video controls, fullscreen, fps, etc. |
+| `js/runtime.js` | ~526 | `CrtRuntime` WebGL2 engine (see §5 + §5A: Mini-TV window, region scissor, GPU timer). |
+| `js/main.js` | ~754 | UI wiring, preset orchestration, hot patch, video controls, fullscreen, meters, Mini-TV/input/aspect logic, on-demand render loop. |
+| `data/crt-presets.json` | ~233 | Committed snapshot of the `crt/` dir listing (`[{name}]`); feeds the preset dropdown (see §3). |
+| `scripts/update-crt-presets.mjs` | ~29 | Regenerates `data/crt-presets.json` from the GitHub API. |
 | `test/validate-passes.mjs` | — | Offline glslang validator (see §7). |
 | `README.md` | ~98 | User-facing docs. |
 
@@ -170,6 +187,60 @@ shader-agnostic** — no per-shader hacks except the one explicit hot patch (§6
 
 ---
 
+## 5A. Mini-TV mode, region rendering, on-demand & frame-time meters
+
+All added this session; all live in `CrtRuntime` (`js/runtime.js`) + `main.js`. The unifying idea:
+crt-royale sizes the **phosphor mask from `OutputSize`** (fixed 3 output px/triad — confirmed: the
+mask passes read `mask_*_static` **compile-time consts**; the `#pragma parameter mask_*` only exist
+in the geometry pass and merely tune its bloom estimate). So the *only* knob for grille fineness is
+the viewport/output resolution. Mini-TV exploits this.
+
+### Mini-TV window (`setWindow`, `virtualRect`, `drawVpRect`)
+Goal: a small canvas (e.g. 480×360) showing a **pixel-exact 1:1 crop** of what crt-royale would
+render at a high **virtual reference resolution** `V` (e.g. 1440p/4K), so the mask keeps its native
+pitch — just fewer triads visible.
+- `setWindow({virtualW, virtualH, cropX, cropY})` stores `this.virtual` + `this.crop` (clamped to
+  `MAX_TEXTURE_SIZE`). `layout()` sizes all viewport-scaled passes off `virtualRect()` (the
+  letterboxed content rect at `V`), so the mask is at `V` pitch. The canvas stays the small window.
+- The **final pass** is clipped to the window via a negatively-offset `gl.viewport(vp.x - crop.x,
+  vp.y - crop.y, V.w, V.h)` into the small canvas (`drawVpRect`). This is valid **because crt-royale
+  uses no `gl_FragCoord`** — every fragment derives mask/curvature from interpolated `tex_uv` ×
+  size uniforms, so a window is a literal sub-rectangle of the full render. `vpRect` stays the
+  content rect (back-compat for the corner test); `virtualVpRect`/`drawVpRect` are exposed too.
+
+### Region ("fast") render — scissor the heavy passes
+Mini-TV's exact mode still renders the full `V` frame in the intermediate passes (cost = a full
+1440p/4K render). Region mode (`setRegionMode(on, margin)`, default ON, margin 0) keeps the FBOs at
+full `V` (so all UV/size math is byte-identical) but **`gl.scissor`s each pass to the window
+footprint** so only visible fragments are shaded. Per-axis rule in `layout()`: scissor an axis iff
+that pass's output dim equals the virtual content-rect dim — selects the window-aligned heavy passes
+(pass1 on Y; 7/8/9/10 on both) and skips the mask tiles / small source passes. Guards: skip if the
+consumer mipmaps the output; a fixed `REGION_PASS_MARGIN` (32px, on top of the user margin) covers
+cross-pass blur/curvature reach; scissored FBOs are cleared once to avoid stale-NaN edge leakage.
+Verified pixel-exact (meanDiff/maxDiff 0) vs the full render — see `region.mjs`.
+
+### On-demand rendering (dirty flag)
+`frame()` only renders when `!onDemandEnabled() || state.needsRender || media.isVideo`. Static images
+render once then idle (fps reads `0`, GPU ~0); `requestRender()` marks dirty and is called from the
+high-level apply functions (`applyFeed`, `applyOutputSize`, `applyParams`, `loadPreset`, flipY).
+Video always renders. `pollGpuQueries()` is still drained every tick while idle.
+
+### Frame-time meters
+`#frameTime` = **CPU** submit time via `performance.now()` (matches DevTools' main track);
+`#gpuTime` = **GPU** execution time via `EXT_disjoint_timer_query_webgl2` (async; `render()` wraps
+the pass loop in a query, `pollGpuQueries()` drains a small queue, `lastGpuTimeMs`). Both refresh
+every 200ms. Note: GPU time is the real cost for "will it hold 60fps"; CPU submit time is much lower
+because GPU work is async.
+
+### Bloom-disable — attempted & reverted
+Pruning crt-royale's bloom sub-chain (passes 8/9/10, repointing the geometry pass to MASKED_SCANLINES)
+worked structurally but **darkened the image**: the geometry pass linearizes its input expecting the
+reconstitute pass's encoding, so reading pass7 double-applies gamma. Reverted; region scissoring
+already makes bloom cheap. A **Halation** toggle survives — it just zeroes `halation_weight` +
+`diffusion_weight` via `applyParams()` (clean, param-only).
+
+---
+
 ## 6. The hot patch (only per-shader special-case)
 
 `crt-royale-scanlines-vertical-interlacing.glsl` line ~296 has
@@ -207,7 +278,7 @@ server rooted at the repo (no separate `http.server` needed) and exits non-zero
 on failure. See `test/e2e/README.md`.
 ```sh
 cd test/e2e && npm install && npx playwright install chromium
-npm test            # all; or test:render / test:presets / test:ui / test:input
+npm test   # all; or test:render / test:presets / test:ui / test:input / test:window / test:region / test:ondemand
 # APP_URL=http://localhost:8000 npm test   # target an already-running server
 ```
 - `helpers.mjs` — shared: built-in static server, browser launch (SwiftShader
@@ -218,11 +289,21 @@ npm test            # all; or test:render / test:presets / test:ui / test:input
 - `multi.mjs` — loops ~13 presets, polls for a non-blank frame each.
   **crt-hyllian is currently skipped** (see §“open ideas”).
 - `ui.mjs` — mobile layout + actual-size (dpr=2) + centered scroll on `#canvasWrap`.
-- `inputres.mjs` — asserts feed dimensions for every input-resolution mode.
-- `window.__crt` (set in main.js) exposes `{runtime, feed, …}` for tests to read
-  pass FBOs, uniforms, scroll, vpRect, etc.
+- `inputres.mjs` — asserts feed dimensions for the **split Lines × Horizontal** axes
+  (source/fixed/custom on each).
+- `window.mjs` — Mini-TV in **exact** mode: asserts the windowed canvas equals the
+  matching sub-rectangle of a full 1440p render (meanDiff/maxDiff 0) + a negative
+  control that it's a crop, not a downscale.
+- `region.mjs` — Mini-TV in **region** mode: same sub-rect equality (centered AND
+  edge crops) and asserts ≥4 passes were scissored (margins cover the footprints).
+- `ondemand.mjs` — static image freezes `frameCount` when idle (fps `0`), a state
+  change renders one frame, on-demand-off renders continuously.
+- `window.__crt` (set in main.js) exposes `{runtime, feed, …}`; runtime now also
+  exposes `vpRect`/`virtualVpRect`/`drawVpRect`, `frameCount`, `lastGpuTimeMs`,
+  per-pass `roi`, `paramValues` — tests read these directly.
 - The earlier one-off diagnostics (`errs*`, `debug-*`, `scroll*`, `dump-uniforms`)
-  were throwaway and not committed.
+  were throwaway and not committed. (`/tmp/e2e/smoke.mjs` is an obsolete
+  external-server smoke test, superseded by `run.mjs`; not worth moving.)
 
 **Verified rendering in real (SwiftShader) browser:** crt-royale (correct
 scanlines/mask/bloom/letterbox), crt-geom, lottes, easymode, aperture,
@@ -239,29 +320,43 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
 
 - **Media** upload (image/video). Video → `<video>` muted+loop+playsinline (autoplay
   needs muted); image → `ImageBitmap`.
-- **Shader** dropdown (GitHub API list + fallback).
-- **Input** resolution: Native(1×), Downscale 2/3/4×, Downscale custom (factor),
-  console presets (NES 256×240, SNES 256×224, Genesis 320×224, PS1 320×240 default,
-  480p 640×480), Custom resolution (WxH). Custom variants reveal `#inputCustom` text box.
+- **Shader** dropdown (from `data/crt-presets.json` snapshot + fallback; see §3).
+- **Input resolution — split into two independent axes** (`feedSize()` resolves each via
+  `axisSize()`):
+  - **Lines** (`#inputLines`, vertical = CRT scanline count): Source / 224 (SNES/Genesis) /
+    240 (NES/PS1, default) / 480 (interlaced) / Custom. crt-royale auto-interlaces past ~288 lines.
+  - **Horizontal** (`#inputWidth`, source detail; does **not** change triad count): Source (default) /
+    256 (NES/SNES) / 320 (Genesis/PS1) / 640 (480p) / Custom. Higher = less blockiness.
+  - Each axis: `source` matches the media on that axis, a fixed value, or a `custom` number box.
+    (Replaces the old single Input dropdown + downscale factors.)
 - **Crop** (center-crop source to aspect *before* shader; default **None**):
   4:3/16:9/1:1/3:2/Custom (`W:H`). Implemented in `sourceRect()` → drawImage src rect.
-- **Fit** (source→input mapping when aspects differ): Auto (letterbox only for fixed
-  console res + match-input aspect, else stretch) / Scale to fit (letterbox) /
-  Stretch. Default **Auto**.
-- **Aspect** (content/display aspect for output letterboxing, independent of output
-  res): 4:3 default / 16:9 / Match input.
-- **Output** resolution: 1080p default / 1440p / 4K / 720p.
+- **Fit** (Auto / Scale to fit / Stretch, default **Auto**): with the anamorphic feed grid, "Scale to
+  fit" now letterboxes the source against the **output display aspect** (not the feed aspect) and maps
+  that to feed pixels — no bars when display aspect == source aspect. `drawFeed()`.
+- **Aspect** (display aspect for output letterboxing): 4:3 default / 16:9 / **Match input**. "Match
+  input" = the **source media's** own aspect (`sourceRect` sw/sh) — *not* the anamorphic feed aspect
+  (that was the bug fixed when the input axes were split). `contentAspect()`.
+- **Output** resolution: 1080p default / 1440p / 4K / 720p (drives the mask pitch in normal mode).
+- **Mini-TV** (`#miniMode`, default off — see §5A): reveals **Reference** res (`#refRes`: 720p–5K,
+  drives the grille pitch), **Window** size (`#windowSize`: 192×144–800×600, the small output canvas),
+  **Pan X/Y** sliders, **Render** mode (`#renderMode`: Region default / Exact), and a **Margin** slider
+  (region only). `applyOutputSize()` branches on `refResolution()`.
 - **Actual size** (default **ON**): 1:1 device pixels via `devicePixelRatio`. Scrolls
   on overflow. Scroll happens on inner `#canvasWrap` (not `#view`) so floating
   controls stay put; auto-centered via a retry loop (a one-shot scroll raced layout).
-- **Flip vertical**, **Reload shader** (clears source cache), **Reset params**,
-  **Download image** (PNG `<preset>-<w>x<h>.png`, current buffer), **Fullscreen**.
+- **Flip vertical**, **On-demand** (default **ON**; static images render only on change — §5A),
+  **Halation** (default ON; off zeroes `halation_weight`+`diffusion_weight`), **Reload shader**
+  (clears source cache), **Reset params**, **Download image** (PNG `<preset>-<w>x<h>.png`, current
+  buffer — in Mini-TV this is the small windowed crop), **Fullscreen**.
 - **Fullscreen:** hides header/status/params (`body.fs`), requests native fullscreen;
   "Show controls" button fades after 2.5s idle, reappears on pointer move.
 - **Per-parameter sliders** from `#pragma parameter` (name/desc/min/max/step/default),
   each with a borderless **↺ reset** to default (preset override value if any, else
   pragma initial).
-- **FPS counter** — right side of `#status`, updates every 0.5s while rendering.
+- **Meters** (`#meters`, right of `#status`, refresh 200ms): `#frameTime` CPU submit ms
+  (`performance.now()`), `#gpuTime` GPU ms (`EXT_disjoint_timer_query`), `#fps`. fps reads `0` when
+  idle in on-demand mode. See §5A.
 - **Video transport** (`#vid`, only for videos): play/pause, seek + `m:ss / m:ss`,
   mute, volume. Rounded translucent panel floating over `#view`, inset 12px sides /
   18px bottom (clear of the scrollbar). Fades after 2.5s idle; stays while hovered.
@@ -282,6 +377,23 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
   switches don't interleave.
 - The ES3 retry: `build()` throws `pass{N} …`; main.js catches, recompiles that pass
   with `{es3compat:true}` once, rebuilds. Stored `rawSrc` on each pass for this.
+- **crt-royale uses no `gl_FragCoord`** — it derives everything from `tex_uv` × size uniforms. This
+  is what makes the Mini-TV `gl.viewport`-offset windowing and the region `gl.scissor` decoupling
+  pixel-exact (a window is a literal sub-rectangle of the full render). Verify this holds before
+  applying the same trick to another shader family.
+- **Mask/grille pitch is `OutputSize`-driven and otherwise fixed**: the mask passes read
+  `mask_*_static` compile-time consts (3 px/triad); the `#pragma parameter mask_*` exist only in the
+  geometry pass (bloom estimate). To change grille fineness you change the render resolution, not a
+  param. Input resolution only changes *triads-per-source-pixel* (relative coarseness).
+- **NTSC presets are resolution-coupled by design**: `crt-royale-ntsc-256px-*` = 3-phase signal at
+  1024px (256×4); `320px-*` = 2-phase at 1280px (320×4). Feeding a mismatched source width gives
+  wrong artifact colors — that's intended, not a bug.
+- **GPU timer query**: SwiftShader (CI) exposes `EXT_disjoint_timer_query_webgl2` but its queries
+  never resolve → we cap the in-flight queue (<8) and fall back to CPU time. `performance.now()`
+  around `render()` measures **CPU submit only** (GPU work is async); don't `gl.finish()` to "fix" it.
+- **Anamorphic feed**: with independent Lines/Horizontal, the feed canvas aspect is meaningless for
+  display. Anything that needs a display aspect (Match-input, Scale-to-fit letterbox) must use the
+  **source media** aspect, never `feed.width/feed.height`.
 
 ---
 
@@ -306,5 +418,11 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
 - Consider PassFeedback/history if a target preset needs it.
 - The 2 `##` presets would need a real macro-expansion pass (expand function-like
   macros + token paste in our preprocessor) to support.
-- Possibly persist UI choices (localStorage).
+- Possibly persist UI choices (localStorage) — now that there are many controls.
 - Drag-and-drop upload; URL param to deep-link a preset.
+- **Bloom disable (proper):** the reverted pass-pruning darkened the image (gamma double-apply at
+  the geometry pass). A correct no-bloom path needs a small shader-level tweak (encode pass7's output
+  to match, or skip the geometry pass's `tex2D_linearize`). Region scissoring already makes bloom
+  cheap, so this is look-only — low priority.
+- **Regenerate `data/crt-presets.json`** when upstream adds presets (`node scripts/update-crt-presets.mjs`,
+  needs API budget / `GITHUB_TOKEN`); the snapshot is a point-in-time copy of the `crt/` dir.
