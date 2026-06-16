@@ -213,7 +213,9 @@ async function loadPreset(presetPath) {
   }
   applyParams();
   if (state.media) applyFeed();
-  applyActualSize();
+  // Re-apply the full output config (mini-TV window, region mode, actual-size)
+  // so those settings persist across a shader rebuild — not just actual-size.
+  applyOutputSize();
   status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
 }
 
