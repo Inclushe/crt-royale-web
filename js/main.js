@@ -83,6 +83,7 @@ const ui = {
   canvas: document.getElementById('canvas'),
   fps: document.getElementById('fps'),
   frameTime: document.getElementById('frameTime'),
+  frameDrops: document.getElementById('frameDrops'),
   gpuTime: document.getElementById('gpuTime'),
   gpuGraph: document.getElementById('gpuGraph'),
   fpsGraph: document.getElementById('fpsGraph'),
@@ -126,6 +127,7 @@ const state = {
   advanced: { interlaceDetect: true },
   lutCache: new Map(),     // resolved URL -> Promise<ImageBitmap> (decoded LUT/mask)
   crtRoyaleWarmed: false,  // whether the crt-royale family has been prewarmed
+  frameDrops: 0,           // dropped frames since the current media loaded
 };
 
 // Decode a LUT/mask texture once and reuse the ImageBitmap across preset builds
@@ -637,6 +639,8 @@ async function onFile(file) {
     state.media = { source: bmp, width: bmp.width, height: bmp.height, isVideo: false };
     ui.vid.classList.remove('active', 'visible');
   }
+  state.frameDrops = 0;
+  ui.frameDrops.textContent = '0 dropped';
   if (state.runtime && state.runtime.passes.length) {
     applyFeed();
     applyOutputSize();
@@ -669,6 +673,17 @@ let cpuTimeSum = 0;
 const GRAPH_CAP = 180;
 const fpsHistory = [];
 let lastFrameTs = null;
+
+// Cap continuous rendering to ~60fps. Some browsers run rAF at 120Hz; running the
+// full pass chain that often over-subscribes the GPU and makes frame time hitch to 2x.
+const TARGET_FPS = 60;
+const TARGET_FRAME_MS = 1000 / TARGET_FPS; // 16.67 ms — one 60fps slot
+// Minimum wall-clock gap between renders. The ~4ms slack (≈ half a 120Hz tick) absorbs
+// rAF jitter so a 120Hz display renders every OTHER tick cleanly (no beating), while a
+// 60Hz display still renders every tick. This is an upper bound only — NOT a v-sync lock
+// (we never read the video's frame rate or snap the cadence to it).
+const MIN_RENDER_MS = TARGET_FRAME_MS - 4; // ~12.67 ms
+let lastRenderTs = 0;
 
 // Draw a min/max-autoscaled sparkline of `data` into a small canvas, plus a faint
 // marker line at `target` (e.g. 60 fps / a budget) so spikes read against a baseline.
@@ -709,56 +724,72 @@ function drawSparkline(canvas, data, color, { target } = {}) {
   ctx.stroke();
 }
 
-function frame() {
-  if (state.runtime && state.media) {
-    // On-demand: video always renders; a static image only when marked dirty.
-    const isVideo = state.media.isVideo;
-    const shouldRender = isVideo || !onDemandEnabled() || state.needsRender;
-    if (shouldRender) {
-      const t0 = performance.now();
-      try {
-        if (isVideo) drawFeed();
-        state.runtime.render();
-      } catch (e) {
-        status('Render error: ' + e.message);
-        state.running = false;
-        throw e;
-      }
-      state.needsRender = false;
-      // CPU main-thread time to submit the frame (matches DevTools' main track).
-      const tEnd = performance.now();
-      cpuTimeSum += tEnd - t0;
-      fpsFrames++;
-      // Unsmoothed instantaneous fps from the frame-to-frame interval.
-      if (lastFrameTs != null) {
-        const dt = tEnd - lastFrameTs;
-        if (dt > 0) {
-          fpsHistory.push(1000 / dt);
-          if (fpsHistory.length > GRAPH_CAP) fpsHistory.shift();
+function frame(now) {
+  if (state.running) requestAnimationFrame(frame); // re-arm first (now = rAF timestamp)
+  if (!(state.runtime && state.media)) return;
+  // On-demand: video (and non-on-demand mode) render continuously; a static image only
+  // when marked dirty. The continuous path is capped to ~60fps; one-shot renders (a real
+  // change, needsRender) bypass the cap so param/UI changes stay instant.
+  const isVideo = state.media.isVideo;
+  const continuous = isVideo || !onDemandEnabled();
+  const shouldRender = continuous || state.needsRender;
+  if (continuous && !state.needsRender && now - lastRenderTs < MIN_RENDER_MS) {
+    // 60fps cap: too soon since the last continuous frame. Skip the render but keep
+    // draining the GPU timer queue so it never wedges. Leave lastFrameTs alone so the
+    // next render's interval stays a true render-to-render gap.
+    state.runtime.pollGpuQueries();
+    return;
+  }
+  if (shouldRender) {
+    lastRenderTs = now;
+    const t0 = performance.now();
+    try {
+      if (isVideo) drawFeed();
+      state.runtime.render();
+    } catch (e) {
+      status('Render error: ' + e.message);
+      state.running = false;
+      throw e;
+    }
+    state.needsRender = false;
+    // CPU main-thread time to submit the frame (matches DevTools' main track).
+    const tEnd = performance.now();
+    cpuTimeSum += tEnd - t0;
+    fpsFrames++;
+    // Unsmoothed instantaneous fps from the frame-to-frame interval.
+    if (lastFrameTs != null) {
+      const dt = tEnd - lastFrameTs;
+      if (dt > 0) {
+        fpsHistory.push(1000 / dt);
+        if (fpsHistory.length > GRAPH_CAP) fpsHistory.shift();
+        // A dropped frame: the interval spans more than one 60fps slot. Count the
+        // missed slots (a ~33ms gap = 1, ~50ms = 2, …). A steady ~16.7ms never counts.
+        const missed = Math.round(dt / TARGET_FRAME_MS) - 1;
+        if (missed > 0) {
+          state.frameDrops += missed;
+          ui.frameDrops.textContent = `${state.frameDrops} dropped`;
         }
       }
-      lastFrameTs = tEnd;
-    } else {
-      // Idle: still drain GPU timer queries so the queue never wedges.
-      state.runtime.pollGpuQueries();
-      lastFrameTs = null; // don't count the idle gap as one slow frame on resume
     }
-    const now = performance.now();
-    if (now - fpsLast >= METER_INTERVAL_MS) {
-      ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
-      if (fpsFrames > 0) {
-        ui.frameTime.textContent = `${(cpuTimeSum / fpsFrames).toFixed(2)} ms`;
-        const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
-        ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
-      }
-      drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
-      drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
-      fpsFrames = 0;
-      cpuTimeSum = 0;
-      fpsLast = now;
-    }
+    lastFrameTs = tEnd;
+  } else {
+    // Idle: still drain GPU timer queries so the queue never wedges.
+    state.runtime.pollGpuQueries();
+    lastFrameTs = null; // don't count the idle gap as one slow frame on resume
   }
-  if (state.running) requestAnimationFrame(frame);
+  if (now - fpsLast >= METER_INTERVAL_MS) {
+    ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
+    if (fpsFrames > 0) {
+      ui.frameTime.textContent = `${(cpuTimeSum / fpsFrames).toFixed(2)} ms`;
+      const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
+      ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
+    }
+    drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
+    drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
+    fpsFrames = 0;
+    cpuTimeSum = 0;
+    fpsLast = now;
+  }
 }
 
 async function init() {
