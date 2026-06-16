@@ -423,7 +423,11 @@ export class CrtRuntime {
     const name = u.name;
     const passes = this.passes;
     const orig = () => this.original;
-    const sizeOfPass = (k) => () => [passes[k].outW, passes[k].outH];
+    // Reuse one backing array per size uniform: `compute(out)` writes the two
+    // components into a persistent array instead of allocating a fresh [x, y] literal
+    // every frame, keeping the per-frame render loop allocation-free (no GC churn).
+    const vec2get = (compute) => { const out = [0, 0]; return () => { compute(out); return out; }; };
+    const sizeOfPass = (k) => vec2get((o) => { o[0] = passes[k].outW; o[1] = passes[k].outH; });
     const texOfPass = (k) => () => passes[k].texture;
 
     if (name === 'MVPMatrix') return { kind: 'mat4', get: () => this.identity };
@@ -431,9 +435,9 @@ export class CrtRuntime {
       return { texture: p.index === 0 ? () => orig().texture : texOfPass(p.index - 1) };
     }
     if (name === 'InputSize' || name === 'TextureSize') {
-      return { kind: 'vec2', get: () => [p.inW, p.inH] };
+      return { kind: 'vec2', get: vec2get((o) => { o[0] = p.inW; o[1] = p.inH; }) };
     }
-    if (name === 'OutputSize') return { kind: 'vec2', get: () => [p.outW, p.outH] };
+    if (name === 'OutputSize') return { kind: 'vec2', get: vec2get((o) => { o[0] = p.outW; o[1] = p.outH; }) };
     if (name === 'FrameCount') {
       return {
         kind: 'int',
@@ -445,7 +449,7 @@ export class CrtRuntime {
     let m;
     if ((m = name.match(/^Orig(Texture|TextureSize|InputSize)$/))) {
       if (m[1] === 'Texture') return { texture: () => orig().texture };
-      return { kind: 'vec2', get: () => [orig().width, orig().height] };
+      return { kind: 'vec2', get: vec2get((o) => { o[0] = orig().width; o[1] = orig().height; }) };
     }
     if ((m = name.match(/^Pass(\d+)(Texture|TextureSize|InputSize)$/))) {
       const k = +m[1] - 1; // Pass1 = output of the first pass
@@ -464,9 +468,10 @@ export class CrtRuntime {
       }
       // InputSize/TextureSize both describe pass k's output framebuffer
       // (they only differ through POT padding, which we don't use)
-      const size = () => k === -1
-        ? [orig().width, orig().height]
-        : [passes[k].outW, passes[k].outH];
+      const size = vec2get((o) => {
+        if (k === -1) { o[0] = orig().width; o[1] = orig().height; }
+        else { o[0] = passes[k].outW; o[1] = passes[k].outH; }
+      });
       return { kind: 'vec2', get: size };
     }
     // alias-based: <ALIAS>texture / <ALIAS>texture_size / <ALIAS>video_size
@@ -484,7 +489,7 @@ export class CrtRuntime {
     }
     if ((m = name.match(/^(\w+?)_size$/)) && this.luts.has(m[1])) {
       const l = this.luts.get(m[1]);
-      return { kind: 'vec2', get: () => [l.width, l.height] };
+      return { kind: 'vec2', get: vec2get((o) => { o[0] = l.width; o[1] = l.height; }) };
     }
     if (name in this.paramValues) {
       return { kind: 'float', get: () => this.paramValues[name] };
