@@ -84,7 +84,6 @@ const ui = {
   advanced: document.getElementById('advanced'),
   canvas: document.getElementById('canvas'),
   fps: document.getElementById('fps'),
-  frameTime: document.getElementById('frameTime'),
   frameDrops: document.getElementById('frameDrops'),
   gpuTime: document.getElementById('gpuTime'),
   gpuGraph: document.getElementById('gpuGraph'),
@@ -684,7 +683,6 @@ function downloadImage() {
 const METER_INTERVAL_MS = 200; // how often the fps / frame-time readouts refresh
 let fpsFrames = 0;
 let fpsLast = performance.now();
-let cpuTimeSum = 0;
 // Unsmoothed per-frame history for the live sparklines (GPU history lives on the runtime).
 const GRAPH_CAP = 180;
 const fpsHistory = [];
@@ -700,7 +698,6 @@ const TARGET_FRAME_MS = 1000 / TARGET_FPS; // 16.67 ms — one 60fps slot
 // (we never read the video's frame rate or snap the cadence to it).
 const MIN_RENDER_MS = TARGET_FRAME_MS - 4; // ~12.67 ms
 let lastRenderTs = 0;
-let cpuFrames = 0; // render() calls counted for the CPU-time meter (producer or legacy)
 
 // --- Render-ahead output queue (rVFC producer / rAF consumer) for smooth video ---
 // A requestVideoFrameCallback producer renders the decoded frame through the chain into
@@ -770,10 +767,8 @@ function onVideoFrame(_now, meta) {
   for (let k = 0; k < n; k++) {
     let slot = state.freeOutputs.pop() || state.videoQueue.shift(); // pool full: drop oldest unshown
     if (!slot) break;
-    const t0 = performance.now();
     try { state.runtime.render(slot.fbo); }
     catch (e) { status('Render error: ' + e.message); state.running = false; throw e; }
-    cpuTimeSum += performance.now() - t0; cpuFrames++;
     state.videoQueue.push(slot);
   }
   producerActive = true;
@@ -854,10 +849,8 @@ function frame(now) {
         state.runtime.present(lastPresented.tex);
         if (!state.media.source.paused) registerDrops(1);
       } else {
-        const t0 = performance.now();
         if (isVideo) { drawFeed(); state.runtime.uploadSource(); }
         state.runtime.render(null);
-        cpuTimeSum += performance.now() - t0; cpuFrames++;
       }
     } catch (e) {
       status('Render error: ' + e.message);
@@ -890,9 +883,6 @@ function frame(now) {
   // readouts are averaged over METER_INTERVAL_MS.
   if (debugEnabled() || now - fpsLast >= METER_INTERVAL_MS) {
     ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
-    if (cpuFrames > 0) {
-      ui.frameTime.textContent = `${(cpuTimeSum / cpuFrames).toFixed(2)} ms`;
-    }
     const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
     ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
     if (debugEnabled()) {
@@ -904,8 +894,6 @@ function frame(now) {
       drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
     }
     fpsFrames = 0;
-    cpuTimeSum = 0;
-    cpuFrames = 0;
     fpsLast = now;
   }
 }

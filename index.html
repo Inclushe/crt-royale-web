@@ -14,7 +14,6 @@
   #view { flex: 1; background: #000; min-width: 0; position: relative; overflow: hidden; }
   #canvasWrap { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
   #fps { font: 12px monospace; color: #9f9; flex: none; }
-  #frameTime { font: 12px monospace; color: #fc9; flex: none; }
   #frameDrops { font: 12px monospace; color: #f99; flex: none; }
   #gpuTime { font: 12px monospace; color: #c9f; flex: none; }
   #meters { display: flex; gap: 12px; flex: none; align-items: center; }
@@ -143,7 +142,7 @@
   <button id="download">Download image</button>
   <button id="fullscreen">Fullscreen</button>
 </header>
-<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameTime" title="CPU time on the main thread to submit the frame (performance.now)">– ms</span><span id="frameDrops" title="Dropped frames since this media loaded (a frame interval roughly 2x the 60fps budget or longer)">0 dropped</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas></span></div>
+<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameDrops" title="Dropped frames since this media loaded (render-ahead queue underruns, or a frame interval over ~2x the 60fps budget)">0 dropped</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas></span></div>
 <div id="content">
   <div id="view"><div id="canvasWrap"><canvas id="canvas" width="1920" height="1080"></canvas></div><button id="showControls">Show controls</button>
     <div id="vid">
