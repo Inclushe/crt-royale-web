@@ -12,6 +12,11 @@ const WRAP_MODE = {
   mirrored_repeat: 'MIRRORED_REPEAT',
 };
 
+// Ring size for the dynamic (video) source texture. Uploading frame N+1 into a
+// different texture than the GPU is still sampling for frame N avoids the per-frame
+// update-hazard stall and lets the GPU run ahead ("triple buffering" the source).
+const SOURCE_BUFFERS = 3;
+
 // Region mode: extra per-side margin (virtual px) added to every scissored pass's
 // ROI, covering cumulative cross-pass sampling reach (curvature/AA + blur kernels +
 // scanline/misconvergence) so the visible window matches the full render exactly.
@@ -48,7 +53,7 @@ export class CrtRuntime {
     this.luts = new Map();
     this.frameCount = 0;
     this.paramValues = {};
-    this.original = null; // { source, width, height, isVideo, texture }
+    this.original = null; // { source, width, height, dynamic, textures[], index, texture }
     this.flipY = false;
     // Mini-TV mode: render the viewport-scaled passes at a high "virtual"
     // resolution (so the phosphor mask keeps its native pitch) while the actual
@@ -233,14 +238,26 @@ export class CrtRuntime {
 
   setOriginal(source, width, height, dynamic) {
     const gl = this.gl;
-    if (this.original) gl.deleteTexture(this.original.texture);
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    if (this.original) for (const t of this.original.textures) gl.deleteTexture(t);
     const m0 = this.passes[0] ? this.passes[0].meta : { filterLinear: true, wrapMode: 'clamp_to_edge' };
-    this.applyTexParams(gl.TEXTURE_2D, { linear: m0.filterLinear, wrap: m0.wrapMode, mipmap: false });
-    this.original = { source, width, height, dynamic, texture };
+    // Video uses a ring of source textures (see SOURCE_BUFFERS); a static image needs
+    // only one (uploaded once here). Each slot is immutable storage updated in place
+    // with texSubImage2D — no per-frame reallocation.
+    const count = dynamic ? SOURCE_BUFFERS : 1;
+    const textures = [];
+    for (let i = 0; i < count; i++) {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+      this.applyTexParams(gl.TEXTURE_2D, { linear: m0.filterLinear, wrap: m0.wrapMode, mipmap: false });
+      textures.push(t);
+    }
+    if (!dynamic) {
+      gl.bindTexture(gl.TEXTURE_2D, textures[0]);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    }
+    this.original = { source, width, height, dynamic, textures, index: 0, texture: textures[0] };
     this.frameCount = 0;
     if (this.passes.length) this.layout();
   }
@@ -502,9 +519,15 @@ export class CrtRuntime {
     if (!this.original || !this.passes.length) return;
 
     if (this.original.dynamic) {
-      gl.bindTexture(gl.TEXTURE_2D, this.original.texture);
+      // Advance to the next ring slot (not the one the GPU may still be sampling for the
+      // previous frame), then update it in place. `texture` tracks the current slot so
+      // the pass-0 input getter (() => orig().texture) samples what we just uploaded.
+      const o = this.original;
+      o.index = (o.index + 1) % o.textures.length;
+      o.texture = o.textures[o.index];
+      gl.bindTexture(gl.TEXTURE_2D, o.texture);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, this.original.source);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, o.source);
     }
 
     let timerQuery = null;
