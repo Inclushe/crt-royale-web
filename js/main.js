@@ -66,6 +66,7 @@ const ui = {
   flipY: document.getElementById('flipY'),
   onDemand: document.getElementById('onDemand'),
   halation: document.getElementById('halation'),
+  fastDebug: document.getElementById('fastDebug'),
   actualSize: document.getElementById('actualSize'),
   download: document.getElementById('download'),
   fullscreen: document.getElementById('fullscreen'),
@@ -188,6 +189,8 @@ function prewarmCrtRoyale() {
 function requestRender() { state.needsRender = true; }
 function onDemandEnabled() { return ui.onDemand ? ui.onDemand.checked : true; }
 function glowEnabled() { return ui.halation ? ui.halation.checked : true; }
+// Fast debug mode: refresh meters/graphs every rendered frame and chart from a 0 baseline.
+function debugEnabled() { return ui.fastDebug ? ui.fastDebug.checked : false; }
 
 // Push parameters to the runtime, applying the glow (halation/diffusion) toggle,
 // and request a render.
@@ -687,7 +690,8 @@ let lastRenderTs = 0;
 
 // Draw a min/max-autoscaled sparkline of `data` into a small canvas, plus a faint
 // marker line at `target` (e.g. 60 fps / a budget) so spikes read against a baseline.
-function drawSparkline(canvas, data, color, { target } = {}) {
+// `floor` pins the low end of the range (e.g. 0) instead of auto-scaling to the data min.
+function drawSparkline(canvas, data, color, { target, floor } = {}) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || canvas.width;
   const cssH = canvas.clientHeight || canvas.height;
@@ -699,6 +703,7 @@ function drawSparkline(canvas, data, color, { target } = {}) {
   if (!data || data.length < 2) return;
   let lo = Infinity, hi = -Infinity;
   for (const v of data) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (floor != null) lo = floor; // fixed baseline (e.g. 0)
   if (target != null) { lo = Math.min(lo, target); hi = Math.max(hi, target); }
   if (hi - lo < 1e-6) hi = lo + 1; // avoid div0 on a flat line
   const span = hi - lo;
@@ -777,15 +782,23 @@ function frame(now) {
     state.runtime.pollGpuQueries();
     lastFrameTs = null; // don't count the idle gap as one slow frame on resume
   }
-  if (now - fpsLast >= METER_INTERVAL_MS) {
+  // Fast debug mode refreshes every rendered frame (instantaneous values); otherwise the
+  // readouts are averaged over METER_INTERVAL_MS.
+  if (debugEnabled() || now - fpsLast >= METER_INTERVAL_MS) {
     ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
     if (fpsFrames > 0) {
       ui.frameTime.textContent = `${(cpuTimeSum / fpsFrames).toFixed(2)} ms`;
       const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
       ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
     }
-    drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
-    drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
+    if (debugEnabled()) {
+      // Chart from 0 with the per-frame budget / 60fps drawn as the target line.
+      drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: TARGET_FRAME_MS, floor: 0 });
+      drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60, floor: 0 });
+    } else {
+      drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
+      drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
+    }
     fpsFrames = 0;
     cpuTimeSum = 0;
     fpsLast = now;
@@ -860,6 +873,7 @@ async function init() {
     });
     ui.onDemand.addEventListener('change', requestRender);
     ui.halation.addEventListener('change', applyParams);
+    ui.fastDebug.addEventListener('change', requestRender);
     ui.actualSize.addEventListener('change', applyActualSize);
     window.addEventListener('resize', () => {
       // The viewport-fill window is sized from #view; re-derive it on resize.
