@@ -251,10 +251,11 @@ async function loadPreset(presetPath) {
   buildParamUI();
   buildAdvancedUI(hasInterlacePass);
 
+  // Output size for the initial build; the canvas + runtime viewport are sized
+  // once below by applyOutputSize() (which also handles mini-TV windowing), so
+  // we don't set them here — doing so resized the canvas twice (full output then
+  // the mini-TV window), causing a visible jump.
   const [w, h] = outputSize();
-  ui.canvas.width = w;
-  ui.canvas.height = h;
-  state.runtime.viewport = { width: w, height: h, aspect: contentAspect() };
   status('Compiling shaders (WebGL)…');
   await new Promise(r => setTimeout(r)); // let the status paint
   if (stale()) return;
