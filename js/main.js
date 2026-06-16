@@ -23,6 +23,20 @@ const FALLBACK_PRESETS = [
   'crt/zfast-crt.glslp',
 ];
 
+// The crt-royale family shares almost all dependencies (the 12-pass chain + the
+// 6 mask LUTs are identical; only the NTSC/PAL pre-pass shaders and the .glslp
+// differ). When any of these is loaded we prewarm the whole set into memory so
+// switching between them runs loadPreset without any network fetch.
+const CRT_ROYALE_PRESETS = [
+  'crt/crt-royale.glslp',
+  'crt/crt-royale-ntsc-256px-composite.glslp',
+  'crt/crt-royale-ntsc-320px-composite.glslp',
+  'crt/crt-royale-ntsc-256px-svideo.glslp',
+  'crt/crt-royale-ntsc-320px-svideo.glslp',
+  'crt/crt-royale-pal-r57shell.glslp',
+];
+const isCrtRoyale = (path) => /crt-royale/.test(path);
+
 const ui = {
   status: document.getElementById('statusText'),
   file: document.getElementById('file'),
@@ -110,7 +124,38 @@ const state = {
   running: false,
   needsRender: true, // on-demand: render the next frame (start dirty)
   advanced: { interlaceDetect: true },
+  lutCache: new Map(),     // resolved URL -> Promise<ImageBitmap> (decoded LUT/mask)
+  crtRoyaleWarmed: false,  // whether the crt-royale family has been prewarmed
 };
+
+// Decode a LUT/mask texture once and reuse the ImageBitmap across preset builds
+// (build() uploads it to a fresh GL texture each time; it does not consume the
+// bitmap). Keyed by resolved URL so shared masks are fetched/decoded once.
+function cachedLut(url) {
+  let p = state.lutCache.get(url);
+  if (!p) {
+    p = (async () => createImageBitmap(await (await fetch(url)).blob(), { imageOrientation: 'flipY' }))();
+    state.lutCache.set(url, p);
+  }
+  return p;
+}
+
+// Eagerly pull every crt-royale preset (glslp + pass shaders + LUTs) into the
+// in-memory caches so subsequent switches hit cache instead of the network.
+// Fire-and-forget and best-effort; everything is keyed by URL so the shared
+// chain passes and mask LUTs are fetched once total.
+function prewarmCrtRoyale() {
+  if (state.crtRoyaleWarmed) return;
+  state.crtRoyaleWarmed = true;
+  for (const path of CRT_ROYALE_PRESETS) {
+    const url = RAW_BASE + path;
+    state.loader.load(url).then(text => {
+      const preset = parsePreset(text);
+      for (const pass of preset.passes) state.loader.load(resolveUrl(url, pass.path));
+      for (const t of preset.textures) if (t.path) cachedLut(resolveUrl(url, t.path));
+    }).catch(() => {}); // best-effort warm; real loads surface their own errors
+  }
+}
 
 // On-demand rendering: mark the scene dirty so the loop renders one frame. Video
 // always renders; for a static image we render only when something changes.
@@ -135,7 +180,8 @@ async function loadPreset(presetPath) {
   const stale = () => gen !== loadGeneration;
   const presetUrl = RAW_BASE + presetPath;
   status(`Fetching preset ${presetPath}…`);
-  const preset = parsePreset(await fetchText(presetUrl));
+  // loader.load memoizes by URL, so a prewarmed glslp comes from memory (no fetch).
+  const preset = parsePreset(await state.loader.load(presetUrl));
 
   // Kick off every dependency download at once (GitHub rate-limits per hour, so
   // parallel is fine) — pass shaders and LUT textures — then process results.
@@ -143,8 +189,7 @@ async function loadPreset(presetPath) {
   status(`Fetching ${preset.passes.length} shader passes…`);
   const shaderSrcs = preset.passes.map(pass => state.loader.load(resolveUrl(presetUrl, pass.path)));
   const lutPromises = preset.textures.filter(t => t.path).map(async t => {
-    const blob = await (await fetch(resolveUrl(presetUrl, t.path))).blob();
-    return { name: t.name, bitmap: await createImageBitmap(blob, { imageOrientation: 'flipY' }) };
+    return { name: t.name, bitmap: await cachedLut(resolveUrl(presetUrl, t.path)) };
   });
 
   // Process shaders in pass order (keeps the param list and first-wins dedup
@@ -217,6 +262,8 @@ async function loadPreset(presetPath) {
   // so those settings persist across a shader rebuild — not just actual-size.
   applyOutputSize();
   status(`Ready: ${presetPath} (${preset.passes.length} pass${preset.passes.length > 1 ? 'es' : ''}). ${state.media ? '' : 'Upload a photo or video to start.'}`);
+  // Warm the rest of the crt-royale family into memory so switching is instant.
+  if (isCrtRoyale(presetPath)) prewarmCrtRoyale();
 }
 
 // Center-crop rectangle of the source media for the selected crop aspect.
@@ -712,6 +759,8 @@ async function init() {
     ui.preset.addEventListener('change', () => loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message)));
     ui.reload.addEventListener('click', () => {
       state.loader.cache.clear();
+      state.lutCache.clear();
+      state.crtRoyaleWarmed = false;
       loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
     });
     ui.resolution.addEventListener('change', applyOutputSize);
