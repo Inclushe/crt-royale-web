@@ -343,8 +343,19 @@ function refResolution() {
   return parseWH(v) || [2560, 1440];
 }
 
+// Backing-store size (device pixels) that exactly fills the visible #view area
+// at actual-size (1:1) scale, so the mini-TV window has no scrollbars.
+function viewportWindowSize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(16, Math.round((ui.view.clientWidth || 480) * dpr));
+  const h = Math.max(16, Math.round((ui.view.clientHeight || 360) * dpr));
+  return [w, h];
+}
+
 function windowSize() {
-  const v = ui.windowSize.value === 'custom-window' ? ui.windowCustom.value : ui.windowSize.value;
+  const sel = ui.windowSize.value;
+  if (sel === 'viewport') return viewportWindowSize();
+  const v = sel === 'custom-window' ? ui.windowCustom.value : sel;
   return parseWH(v) || [480, 360];
 }
 
@@ -747,7 +758,9 @@ async function init() {
     ui.halation.addEventListener('change', applyParams);
     ui.actualSize.addEventListener('change', applyActualSize);
     window.addEventListener('resize', () => {
-      if (ui.actualSize.checked) applyActualSize();
+      // The viewport-fill window is sized from #view; re-derive it on resize.
+      if (miniEnabled() && ui.windowSize.value === 'viewport') applyOutputSize();
+      else if (ui.actualSize.checked) applyActualSize();
     });
     ui.resetParams.addEventListener('click', () => {
       resetParamValues();
