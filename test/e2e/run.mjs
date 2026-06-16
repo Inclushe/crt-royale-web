@@ -18,6 +18,7 @@ const code = await withApp(async ({ browser, url }) => {
 
   const stats = await page.evaluate(() => {
     const src = document.getElementById('canvas');
+    window.__crt.runtime.render(); // sync render so readback works without preserveDrawingBuffer
     const c = document.createElement('canvas');
     c.width = src.width; c.height = src.height;
     const x = c.getContext('2d');
@@ -35,6 +36,7 @@ const code = await withApp(async ({ browser, url }) => {
 
   const corners = await page.evaluate(() => {
     const src = document.getElementById('canvas');
+    window.__crt.runtime.render(); // sync render so readback works without preserveDrawingBuffer
     const vp = window.__crt.runtime.vpRect; // content rect (GL coords, y up)
     const c = document.createElement('canvas');
     c.width = src.width; c.height = src.height;

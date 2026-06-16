@@ -30,6 +30,7 @@ const code = await withApp(async ({ browser, url }) => {
   await page.waitForTimeout(2500);
   const full = await page.evaluate(() => {
     const src = document.getElementById('canvas');
+    window.__crt.runtime.render(); // sync render so readback works without preserveDrawingBuffer
     const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
     const x = c.getContext('2d'); x.drawImage(src, 0, 0);
     const img = x.getImageData(0, 0, c.width, c.height);
@@ -53,6 +54,7 @@ const code = await withApp(async ({ browser, url }) => {
 
   const cmp = await page.evaluate(() => {
     const src = document.getElementById('canvas');
+    window.__crt.runtime.render(); // sync render so readback works without preserveDrawingBuffer
     const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
     const x = c.getContext('2d'); x.drawImage(src, 0, 0);
     const small = x.getImageData(0, 0, c.width, c.height);

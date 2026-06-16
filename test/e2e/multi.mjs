@@ -38,6 +38,7 @@ const code = await withApp(async ({ browser, url }) => {
       null, { timeout: 120000 }).catch(() => {});
     const measure = () => page.evaluate(() => {
       const src = document.getElementById('canvas');
+      window.__crt.runtime.render(); // sync render so readback works without preserveDrawingBuffer
       const c = document.createElement('canvas'); c.width = 200; c.height = 150;
       const x = c.getContext('2d'); x.drawImage(src, 0, 0, 200, 150);
       const d = x.getImageData(0, 0, 200, 150).data;

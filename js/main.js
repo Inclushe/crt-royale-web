@@ -885,7 +885,11 @@ async function init() {
       buildParamUI();
       applyParams();
     });
-    ui.download.addEventListener('click', downloadImage);
+    // Snapshot disabled: the canvas no longer preserves its drawing buffer (perf
+    // experiment), so toBlob() would read an empty buffer. Re-enable by rendering a
+    // frame synchronously right before capture if we keep preserveDrawingBuffer off.
+    ui.download.disabled = true;
+    ui.download.title = 'Snapshot temporarily disabled (preserveDrawingBuffer off for the frame-pacing experiment)';
 
     // Fullscreen: hide all controls, show just the canvas. A "Show controls"
     // button appears on pointer activity and fades after a few seconds idle.

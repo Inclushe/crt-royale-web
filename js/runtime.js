@@ -40,7 +40,10 @@ function compileShader(gl, type, source, label) {
 
 export class CrtRuntime {
   constructor(canvas) {
-    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
+    // No preserveDrawingBuffer: keeping it true forces the browser to copy the whole
+    // canvas at present time every frame instead of a zero-copy swap. Snapshot/readback
+    // that relied on the preserved buffer is disabled while we test this.
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
     if (!gl) throw new Error('WebGL2 is not available in this browser');
     this.gl = gl;
     this.canvas = canvas;
