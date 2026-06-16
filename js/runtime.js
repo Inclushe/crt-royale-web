@@ -88,6 +88,11 @@ export class CrtRuntime {
 
     this.identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
+    // Render-ahead: a passthrough program to blit a queued output texture to the canvas,
+    // plus a lazily-allocated ring of canvas-sized {tex,fbo} render targets (see render()).
+    this.presentProg = null;     // { prog, loc } built on first present()
+    this.outputPool = null;      // { count, w, h, items: [{tex,fbo}] }
+
     // Optional GPU timing: measures wall-clock time the GPU spends on the pass
     // chain. Results arrive a few frames late (async), so we keep a small queue.
     this.timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
@@ -517,21 +522,87 @@ export class CrtRuntime {
     return null;
   }
 
-  render() {
+  // Upload the current source frame into the next source-ring slot. Separated from
+  // render() so the render-ahead producer can upload a decoded video frame once and then
+  // render several interlace fields (FrameCount++) from it. No-op for static sources.
+  uploadSource() {
+    if (!this.original || !this.original.dynamic) return;
+    const gl = this.gl;
+    // Advance to the next ring slot (not the one the GPU may still be sampling for the
+    // previous frame), then update it in place. `texture` tracks the current slot so the
+    // pass-0 input getter (() => orig().texture) samples what we just uploaded.
+    const o = this.original;
+    o.index = (o.index + 1) % o.textures.length;
+    o.texture = o.textures[o.index];
+    gl.bindTexture(gl.TEXTURE_2D, o.texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, o.source);
+  }
+
+  // Lazily (re)allocate a ring of canvas-sized RGBA8 render targets used to hold
+  // pre-rendered output frames for the render-ahead queue. Rebuilt when the canvas resizes.
+  ensureOutputPool(count) {
+    const gl = this.gl, w = this.canvas.width, h = this.canvas.height;
+    const p = this.outputPool;
+    if (p && p.count === count && p.w === w && p.h === h) return p;
+    if (p) for (const it of p.items) { gl.deleteTexture(it.tex); gl.deleteFramebuffer(it.fbo); }
+    const items = [];
+    for (let i = 0; i < count; i++) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+      this.applyTexParams(gl.TEXTURE_2D, { linear: true, wrap: 'clamp_to_edge', mipmap: false });
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      items.push({ tex, fbo });
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.outputPool = { count, w, h, items };
+    return this.outputPool;
+  }
+
+  buildPresentProgram() {
+    const gl = this.gl;
+    const vs = compileShader(gl, gl.VERTEX_SHADER,
+      '#version 300 es\nin vec2 VertexCoord;\nin vec2 TexCoord;\nout vec2 v_uv;\n' +
+      'void main(){ v_uv = TexCoord; gl_Position = vec4(VertexCoord, 0.0, 1.0); }', 'present vertex');
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER,
+      '#version 300 es\nprecision mediump float;\nuniform sampler2D u_tex;\nin vec2 v_uv;\n' +
+      'out vec4 o;\nvoid main(){ o = texture(u_tex, v_uv); }', 'present fragment');
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+    gl.bindAttribLocation(prog, 0, 'VertexCoord');
+    gl.bindAttribLocation(prog, 1, 'TexCoord');
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error('present link failed: ' + gl.getProgramInfoLog(prog));
+    gl.deleteShader(vs); gl.deleteShader(fs);
+    return { prog, loc: gl.getUniformLocation(prog, 'u_tex') };
+  }
+
+  // Blit a pre-rendered output texture (full canvas size, letterbox already baked in) 1:1
+  // to the canvas. Used by the render-ahead consumer.
+  present(tex) {
+    const gl = this.gl;
+    if (!this.presentProg) this.presentProg = this.buildPresentProgram();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.useProgram(this.presentProg.prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(this.presentProg.loc, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // Run the pass chain. The final pass renders to `outFbo` (a canvas-sized render target
+  // from ensureOutputPool) when given, else to the canvas. Source upload is the caller's
+  // job (see uploadSource()). Advances FrameCount once per call (drives interlace fields).
+  render(outFbo = null) {
     const gl = this.gl;
     if (!this.original || !this.passes.length) return;
-
-    if (this.original.dynamic) {
-      // Advance to the next ring slot (not the one the GPU may still be sampling for the
-      // previous frame), then update it in place. `texture` tracks the current slot so
-      // the pass-0 input getter (() => orig().texture) samples what we just uploaded.
-      const o = this.original;
-      o.index = (o.index + 1) % o.textures.length;
-      o.texture = o.textures[o.index];
-      gl.bindTexture(gl.TEXTURE_2D, o.texture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, o.source);
-    }
 
     let timerQuery = null;
     if (this.timerExt && this.gpuQueries.length < 8) {
@@ -549,9 +620,9 @@ export class CrtRuntime {
         }
       }
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, p.isLast ? null : p.fbo);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, p.isLast ? outFbo : p.fbo);
       if (p.isLast) {
-        // letter/pillarbox: clear the whole canvas, draw into the viewport rect
+        // letter/pillarbox: clear the whole target (canvas or output texture), draw into the rect
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);

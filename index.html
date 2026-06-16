@@ -137,6 +137,7 @@
   <label title="Render only when something changes (static images); video always renders"><input type="checkbox" id="onDemand" checked> On-demand</label>
   <label title="Halation / diffusion glow (zeroes halation_weight &amp; diffusion_weight)"><input type="checkbox" id="halation" checked> Halation</label>
   <label title="Update meters and graphs every frame; chart GPU/FPS from 0 with target lines (more overhead)"><input type="checkbox" id="fastDebug"> Fast debug</label>
+  <label title="Render video frames ahead via requestVideoFrameCallback into a buffer, displayed at 60fps (smooths interlaced/timing-sensitive video)"><input type="checkbox" id="renderAhead" checked> Render-ahead</label>
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
   <button id="download">Download image</button>
