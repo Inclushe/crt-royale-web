@@ -41,6 +41,10 @@ export class CrtRuntime {
     this.canvas = canvas;
     this.floatExt = gl.getExtension('EXT_color_buffer_float');
     this.passes = [];
+    // Compiled+linked GL programs keyed by (vertexSrc \x00 fragmentSrc). Programs
+    // are immutable for a given source, so caching lets repeated/shared passes
+    // (and preset switches) skip recompilation. Survives destroyPasses().
+    this.programCache = new Map();
     this.luts = new Map();
     this.frameCount = 0;
     this.paramValues = {};
@@ -149,29 +153,9 @@ export class CrtRuntime {
       this.luts.set(t.name, { texture: tex, width: bmp.width, height: bmp.height, meta: t });
     }
 
-    // programs
+    // programs (reused from the cache when the same source was already compiled)
     this.passes = compiledPasses.map(({ meta, vertexSrc, fragmentSrc }, i) => {
-      const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSrc, `pass${i} vertex`);
-      const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSrc, `pass${i} fragment`);
-      const prog = gl.createProgram();
-      gl.attachShader(prog, vs);
-      gl.attachShader(prog, fs);
-      gl.bindAttribLocation(prog, 0, 'VertexCoord');
-      gl.bindAttribLocation(prog, 1, 'TexCoord');
-      gl.linkProgram(prog);
-      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        throw new Error(`pass${i} link failed: ${gl.getProgramInfoLog(prog)}`);
-      }
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-
-      const uniforms = [];
-      const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
-      for (let u = 0; u < n; u++) {
-        const info = gl.getActiveUniform(prog, u);
-        const name = info.name.replace(/\[0\]$/, '');
-        uniforms.push({ name, type: info.type, loc: gl.getUniformLocation(prog, info.name) });
-      }
+      const { prog, uniforms } = this.getProgram(vertexSrc, fragmentSrc, `pass${i}`);
       return {
         index: i, meta, prog, uniforms, vertexSrc, fragmentSrc,
         isLast: i === compiledPasses.length - 1,
@@ -185,10 +169,62 @@ export class CrtRuntime {
     if (this.original) this.layout();
   }
 
+  // Compile + link a program for the given stage sources, caching by source so
+  // shared passes and preset switches reuse it. `label` (e.g. "pass3") prefixes
+  // compile/link errors so loadPreset's ES3 retry can locate the failing pass.
+  getProgram(vertexSrc, fragmentSrc, label) {
+    const key = vertexSrc + '\x00' + fragmentSrc;
+    const hit = this.programCache.get(key);
+    if (hit) return hit;
+    const gl = this.gl;
+    const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSrc, `${label} vertex`);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSrc, `${label} fragment`);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.bindAttribLocation(prog, 0, 'VertexCoord');
+    gl.bindAttribLocation(prog, 1, 'TexCoord');
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(prog);
+      gl.deleteProgram(prog); gl.deleteShader(vs); gl.deleteShader(fs);
+      throw new Error(`${label} link failed: ${log}`);
+    }
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+
+    const uniforms = [];
+    const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+    for (let u = 0; u < n; u++) {
+      const info = gl.getActiveUniform(prog, u);
+      const name = info.name.replace(/\[0\]$/, '');
+      uniforms.push({ name, type: info.type, loc: gl.getUniformLocation(prog, info.name) });
+    }
+    const entry = { prog, uniforms };
+    this.programCache.set(key, entry);
+    return entry;
+  }
+
+  // Precompile a program into the cache without building a pass chain (used to
+  // warm preset switches). Returns true on success, false on compile/link error
+  // (so the caller can warm an ES3 fallback instead).
+  warmProgram(vertexSrc, fragmentSrc) {
+    try { this.getProgram(vertexSrc, fragmentSrc, 'warm'); return true; }
+    catch { return false; }
+  }
+
+  // Drop cached programs so the next build() recompiles from source. Programs
+  // still referenced by the live pass chain stay valid until destroyPasses runs.
+  clearProgramCache() { this.programCache.clear(); }
+
   destroyPasses() {
     const gl = this.gl;
+    // Keep programs that are still in the cache (shared / reusable across
+    // switches); delete only ones the cache has dropped (e.g. after a reload).
+    const cached = new Set();
+    for (const e of this.programCache.values()) cached.add(e.prog);
     for (const p of this.passes) {
-      if (p.prog) gl.deleteProgram(p.prog);
+      if (p.prog && !cached.has(p.prog)) gl.deleteProgram(p.prog);
       if (p.texture) gl.deleteTexture(p.texture);
       if (p.fbo) gl.deleteFramebuffer(p.fbo);
     }

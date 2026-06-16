@@ -140,19 +140,43 @@ function cachedLut(url) {
   return p;
 }
 
+// Apply the crt-royale interlace-detect hot patch to a pass source. Shared by
+// loadPreset and the prewarm so both produce byte-identical stage sources (hence
+// identical program-cache keys).
+function patchPassSource(rawSrc, passPath) {
+  if (/crt-royale-scanlines-vertical-interlacing\.glsl$/.test(passPath) && !state.advanced.interlaceDetect) {
+    return rawSrc.replace(/(\binterlace_detect\s*=\s*)true(\s*;)/, '$1false$2');
+  }
+  return rawSrc;
+}
+
 // Eagerly pull every crt-royale preset (glslp + pass shaders + LUTs) into the
-// in-memory caches so subsequent switches hit cache instead of the network.
-// Fire-and-forget and best-effort; everything is keyed by URL so the shared
-// chain passes and mask LUTs are fetched once total.
+// in-memory caches AND precompile each pass program, so subsequent switches hit
+// cache instead of the network and skip GL compilation. Fire-and-forget and
+// best-effort; everything is keyed by URL/source so shared chain passes, mask
+// LUTs, and programs are fetched/compiled once total. Yields between passes so
+// the compile burst doesn't jank the render loop.
 function prewarmCrtRoyale() {
   if (state.crtRoyaleWarmed) return;
   state.crtRoyaleWarmed = true;
   for (const path of CRT_ROYALE_PRESETS) {
     const url = RAW_BASE + path;
-    state.loader.load(url).then(text => {
+    state.loader.load(url).then(async text => {
       const preset = parsePreset(text);
-      for (const pass of preset.passes) state.loader.load(resolveUrl(url, pass.path));
       for (const t of preset.textures) if (t.path) cachedLut(resolveUrl(url, t.path));
+      for (const pass of preset.passes) {
+        const raw = await state.loader.load(resolveUrl(url, pass.path));
+        const src = patchPassSource(raw, pass.path);
+        // Warm the program build() will use; fall back to the ES3 source loadPreset
+        // would retry with if the legacy path fails to compile.
+        const ok = state.runtime.warmProgram(buildStageSource(src, 'VERTEX'), buildStageSource(src, 'FRAGMENT'));
+        if (!ok) {
+          state.runtime.warmProgram(
+            buildStageSource(src, 'VERTEX', { es3compat: true }),
+            buildStageSource(src, 'FRAGMENT', { es3compat: true }));
+        }
+        await new Promise(r => setTimeout(r)); // spread compiles across tasks
+      }
     }).catch(() => {}); // best-effort warm; real loads surface their own errors
   }
 }
@@ -206,12 +230,8 @@ async function loadPreset(presetPath) {
     }
     // Hot patch: crt-royale's vertical-interlacing pass forces interlace_detect
     // on; expose it as an advanced toggle (default off).
-    if (/crt-royale-scanlines-vertical-interlacing\.glsl$/.test(pass.path)) {
-      hasInterlacePass = true;
-      if (!state.advanced.interlaceDetect) {
-        src = src.replace(/(\binterlace_detect\s*=\s*)true(\s*;)/, '$1false$2');
-      }
-    }
+    if (/crt-royale-scanlines-vertical-interlacing\.glsl$/.test(pass.path)) hasInterlacePass = true;
+    src = patchPassSource(src, pass.path);
     compiledPasses.push({
       meta: pass,
       rawSrc: src,
@@ -760,6 +780,7 @@ async function init() {
     ui.reload.addEventListener('click', () => {
       state.loader.cache.clear();
       state.lutCache.clear();
+      state.runtime.clearProgramCache();
       state.crtRoyaleWarmed = false;
       loadPreset(ui.preset.value).catch(e => status('Shader error: ' + e.message));
     });
