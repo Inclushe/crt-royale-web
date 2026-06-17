@@ -67,7 +67,6 @@ const ui = {
   onDemand: document.getElementById('onDemand'),
   halation: document.getElementById('halation'),
   fastDebug: document.getElementById('fastDebug'),
-  renderAhead: document.getElementById('renderAhead'),
   actualSize: document.getElementById('actualSize'),
   download: document.getElementById('download'),
   fullscreen: document.getElementById('fullscreen'),
@@ -129,9 +128,6 @@ const state = {
   lutCache: new Map(),     // resolved URL -> Promise<ImageBitmap> (decoded LUT/mask)
   crtRoyaleWarmed: false,  // whether the crt-royale family has been prewarmed
   frameDrops: 0,           // dropped frames since the current media loaded
-  videoQueue: [],          // render-ahead: pre-rendered output slots awaiting display (FIFO)
-  freeOutputs: [],         // render-ahead: output slots available to the producer
-  outputPoolRef: null,     // identity of the runtime output pool (detects resize rebuilds)
 };
 
 // Decode a LUT/mask texture once and reuse the ImageBitmap across preset builds
@@ -472,9 +468,6 @@ function applyOutputSize() {
     state.runtime.setRegionMode(regionMode(), regionMargin());
   }
   applyActualSize();
-  // Canvas size may have changed: drop pre-rendered frames so the consumer falls back to
-  // direct rendering until the producer rebuilds the (resized) output pool and re-pre-rolls.
-  flushVideoQueue();
   requestRender();
 }
 
@@ -612,7 +605,6 @@ function setupVideoControls(video) {
   };
   ui.vidSeek.oninput = () => {
     if (video.duration) video.currentTime = (ui.vidSeek.value / 1000) * video.duration;
-    flushVideoQueue(); // drop pre-rendered frames from the old position and re-pre-roll
   };
   ui.vidMute.onclick = () => {
     video.muted = !video.muted;
@@ -633,10 +625,6 @@ async function onFile(file) {
     state.media.source.pause();
     URL.revokeObjectURL(state.media.source.src);
   }
-  // Reset the render-ahead producer/queue for the new media (old rVFC callbacks no-op via
-  // the stale-video guard once producerVideo changes).
-  producerVideo = null; producerActive = false;
-  flushVideoQueue();
   if (file.type.startsWith('video/')) {
     const video = document.createElement('video');
     video.src = URL.createObjectURL(file);
@@ -648,7 +636,6 @@ async function onFile(file) {
     });
     state.media = { source: video, width: video.videoWidth, height: video.videoHeight, isVideo: true };
     setupVideoControls(video);
-    if (rvfcSupported) { producerVideo = video; video.requestVideoFrameCallback(onVideoFrame); }
   } else {
     const bmp = await createImageBitmap(file);
     state.media = { source: bmp, width: bmp.width, height: bmp.height, isVideo: false };
@@ -698,81 +685,6 @@ const TARGET_FRAME_MS = 1000 / TARGET_FPS; // 16.67 ms — one 60fps slot
 // (we never read the video's frame rate or snap the cadence to it).
 const MIN_RENDER_MS = TARGET_FRAME_MS - 4; // ~12.67 ms
 let lastRenderTs = 0;
-
-// --- Render-ahead output queue (rVFC producer / rAF consumer) for smooth video ---
-// A requestVideoFrameCallback producer renders the decoded frame through the chain into
-// canvas-sized output textures (emitting the right number of 60fps interlace fields per
-// frame, FrameCount++ each), and the 60fps rAF consumer presents one queued frame per tick.
-// This decouples the video fps from the canvas fps so 480i keeps its 60Hz field cadence.
-const OUTPUT_POOL = 4;   // canvas-sized render targets shared by producer + consumer
-const PREROLL = 2;       // frames to buffer before the consumer starts presenting
-const MAX_FIELDS = 4;    // cap on interlace fields emitted per decoded video frame
-const rvfcSupported = typeof HTMLVideoElement !== 'undefined'
-  && 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
-let producerVideo = null;     // the <video> currently driving the producer
-let producerActive = false;   // producer has filled at least one frame for this media
-let presenting = false;       // consumer met pre-roll and is showing queued frames
-let lastPresented = null;     // last shown output slot (repeated on underrun)
-let producerOwed = 0;         // fractional field-count accumulator (keeps long-run rate 60/s)
-let producerLastMedia = null; // previous rVFC mediaTime (seconds)
-
-function renderAheadEnabled() { return ui.renderAhead ? ui.renderAhead.checked : true; }
-
-// (Re)bind the output-texture pool to the current canvas size, resetting the queue whenever
-// the pool is (re)created (first use or a canvas resize).
-function ensureVideoQueue() {
-  const pool = state.runtime.ensureOutputPool(OUTPUT_POOL);
-  if (state.outputPoolRef !== pool) {
-    state.outputPoolRef = pool;
-    state.freeOutputs = pool.items.slice();
-    state.videoQueue = [];
-    lastPresented = null;
-    presenting = false;
-  }
-}
-
-// Return all slots to the free list and drop back into pre-roll (media change / seek / toggle).
-function flushVideoQueue() {
-  state.freeOutputs = state.outputPoolRef ? state.outputPoolRef.items.slice() : [];
-  state.videoQueue = [];
-  lastPresented = null;
-  presenting = false;
-  producerOwed = 0;
-  producerLastMedia = null;
-}
-
-function registerDrops(n) {
-  state.frameDrops += n;
-  ui.frameDrops.textContent = `${state.frameDrops} dropped`;
-}
-
-// rVFC producer: render the just-decoded video frame through the chain into output-queue
-// slots. Emits N = round(frameDuration * 60) fields (each a distinct FrameCount) so the
-// long-run output rate is 60/s regardless of the video's fps.
-function onVideoFrame(_now, meta) {
-  const video = producerVideo;
-  if (!video || !state.media || video !== state.media.source) return; // stale: media changed
-  video.requestVideoFrameCallback(onVideoFrame);                      // re-arm for next frame
-  if (!renderAheadEnabled() || !state.runtime || !state.runtime.passes.length) return;
-  ensureVideoQueue();
-  let dt = (producerLastMedia == null) ? (1 / 60) : (meta.mediaTime - producerLastMedia);
-  if (!(dt > 0) || dt > 0.5) dt = 1 / 60; // first frame / seek / loop wrap: emit one
-  producerLastMedia = meta.mediaTime;
-  producerOwed += dt * TARGET_FPS;
-  let n = Math.max(1, Math.min(MAX_FIELDS, Math.round(producerOwed)));
-  producerOwed -= n;
-  if (producerOwed < -MAX_FIELDS || producerOwed > MAX_FIELDS) producerOwed = 0; // guard drift
-  drawFeed();                  // sample the decoded frame once
-  state.runtime.uploadSource(); // upload it once; render n fields from it
-  for (let k = 0; k < n; k++) {
-    let slot = state.freeOutputs.pop() || state.videoQueue.shift(); // pool full: drop oldest unshown
-    if (!slot) break;
-    try { state.runtime.render(slot.fbo); }
-    catch (e) { status('Render error: ' + e.message); state.running = false; throw e; }
-    state.videoQueue.push(slot);
-  }
-  producerActive = true;
-}
 
 // Draw a min/max-autoscaled sparkline of `data` into a small canvas, plus a faint
 // marker line at `target` (e.g. 60 fps / a budget) so spikes read against a baseline.
@@ -833,47 +745,33 @@ function frame(now) {
   }
   if (shouldRender) {
     lastRenderTs = now;
-    // Render-ahead present path: when the rVFC producer is feeding the queue, the consumer
-    // just blits the next pre-rendered frame. Otherwise (static image, on-demand one-shot,
-    // pre-roll not yet met, or no rVFC) it renders directly — the universal fallback.
-    const useQueue = isVideo && renderAheadEnabled() && rvfcSupported && producerActive;
     try {
-      if (useQueue && state.videoQueue.length >= (presenting ? 1 : PREROLL)) {
-        presenting = true;
-        const slot = state.videoQueue.shift();
-        state.runtime.present(slot.tex);
-        if (lastPresented) state.freeOutputs.push(lastPresented);
-        lastPresented = slot;
-      } else if (useQueue && presenting && lastPresented) {
-        // Underrun: nothing buffered. Repeat the last frame; count a real drop unless paused.
-        state.runtime.present(lastPresented.tex);
-        if (!state.media.source.paused) registerDrops(1);
-      } else {
-        if (isVideo) { drawFeed(); state.runtime.uploadSource(); }
-        state.runtime.render(null);
-      }
+      if (isVideo) drawFeed();
+      state.runtime.render();
     } catch (e) {
       status('Render error: ' + e.message);
       state.running = false;
       throw e;
     }
     state.needsRender = false;
+    const tEnd = performance.now();
     fpsFrames++;
-    // Unsmoothed instantaneous fps from the present-to-present interval.
+    // Unsmoothed instantaneous fps from the frame-to-frame interval.
     if (lastFrameTs != null) {
-      const dt = now - lastFrameTs;
+      const dt = tEnd - lastFrameTs;
       if (dt > 0) {
         fpsHistory.push(1000 / dt);
         if (fpsHistory.length > GRAPH_CAP) fpsHistory.shift();
-        // Legacy path has no queue, so approximate drops from a >1-slot interval. The queue
-        // path counts real underruns above instead.
-        if (!useQueue) {
-          const missed = Math.round(dt / TARGET_FRAME_MS) - 1;
-          if (missed > 0) registerDrops(missed);
+        // A dropped frame: the interval spans more than one 60fps slot. Count the
+        // missed slots (a ~33ms gap = 1, ~50ms = 2, …). A steady ~16.7ms never counts.
+        const missed = Math.round(dt / TARGET_FRAME_MS) - 1;
+        if (missed > 0) {
+          state.frameDrops += missed;
+          ui.frameDrops.textContent = `${state.frameDrops} dropped`;
         }
       }
     }
-    lastFrameTs = now;
+    lastFrameTs = tEnd;
   } else {
     // Idle: still drain GPU timer queries so the queue never wedges.
     state.runtime.pollGpuQueries();
@@ -883,8 +781,10 @@ function frame(now) {
   // readouts are averaged over METER_INTERVAL_MS.
   if (debugEnabled() || now - fpsLast >= METER_INTERVAL_MS) {
     ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
-    const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
-    ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
+    if (fpsFrames > 0) {
+      const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
+      ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
+    }
     if (debugEnabled()) {
       // Chart from 0 with the per-frame budget / 60fps drawn as the target line.
       drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: TARGET_FRAME_MS, floor: 0 });
@@ -967,9 +867,6 @@ async function init() {
     ui.onDemand.addEventListener('change', requestRender);
     ui.halation.addEventListener('change', applyParams);
     ui.fastDebug.addEventListener('change', requestRender);
-    // Toggling render-ahead off drops queued frames so the consumer falls back to direct
-    // rendering immediately; toggling on lets the (still-armed) producer refill + re-pre-roll.
-    ui.renderAhead.addEventListener('change', () => { flushVideoQueue(); requestRender(); });
     ui.actualSize.addEventListener('change', applyActualSize);
     window.addEventListener('resize', () => {
       // The viewport-fill window is sized from #view; re-derive it on resize.

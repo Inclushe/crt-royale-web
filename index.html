@@ -136,13 +136,12 @@
   <label title="Render only when something changes (static images); video always renders"><input type="checkbox" id="onDemand" checked> On-demand</label>
   <label title="Halation / diffusion glow (zeroes halation_weight &amp; diffusion_weight)"><input type="checkbox" id="halation" checked> Halation</label>
   <label title="Update meters and graphs every frame; chart GPU/FPS from 0 with target lines (more overhead)"><input type="checkbox" id="fastDebug"> Fast debug</label>
-  <label title="Render video frames ahead via requestVideoFrameCallback into a buffer, displayed at 60fps (smooths interlaced/timing-sensitive video)"><input type="checkbox" id="renderAhead" checked> Render-ahead</label>
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
   <button id="download">Download image</button>
   <button id="fullscreen">Fullscreen</button>
 </header>
-<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameDrops" title="Dropped frames since this media loaded (render-ahead queue underruns, or a frame interval over ~2x the 60fps budget)">0 dropped</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas></span></div>
+<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameDrops" title="Dropped frames since this media loaded (a frame interval roughly 2x the 60fps budget or longer)">0 dropped</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas></span></div>
 <div id="content">
   <div id="view"><div id="canvasWrap"><canvas id="canvas" width="1920" height="1080"></canvas></div><button id="showControls">Show controls</button>
     <div id="vid">

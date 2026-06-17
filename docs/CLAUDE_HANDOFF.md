@@ -95,7 +95,7 @@ GitHub endpoints (in `main.js`):
 
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `index.html` | ~154 | DOM + all CSS. Header controls (incl. Mini-TV + Lines/Horizontal), `#status` (with `#frameTime`/`#gpuTime`/`#fps` in `#meters`), `#view`>`#canvasWrap`>`#canvas` + floating `#vid`/`#showControls`, `#params`>`#advanced`+`#paramList`. |
+| `index.html` | ~154 | DOM + all CSS. Header controls (incl. Mini-TV + Lines/Horizontal), `#status` (with `#frameDrops`/`#gpuTime`/`#fps` + sparklines in `#meters`), `#view`>`#canvasWrap`>`#canvas` + floating `#vid`/`#showControls`, `#params`>`#advanced`+`#paramList`. |
 | `js/slangp.js` | ~100 | `parsePreset(text)` → `{passes, textures, parameterOverrides}`. **Named slangp but parses `.glslp`** (identical key/value format). Handles `scale_type[_x/_y]`, `scale[_x/_y]`, `filter_linear`, `wrap_mode`, `srgb_framebuffer`, `float_framebuffer`, `mipmap_input`, `alias`, `frame_count_mod`, `textures` + per-LUT `_linear/_wrap_mode/_mipmap`. Leftover numeric keys → `parameterOverrides`. |
 | `js/source.js` | ~117 | `buildStageSource(src, stage, {es3compat})`, `parseParameterPragmas(src)`, `SourceLoader` (URL fetch+**promise**-cache), `resolveUrl`. |
 | `js/flatten.js` | ~436 | Preprocessor + ES-compat transforms (see §5). |
@@ -226,11 +226,30 @@ high-level apply functions (`applyFeed`, `applyOutputSize`, `applyParams`, `load
 Video always renders. `pollGpuQueries()` is still drained every tick while idle.
 
 ### Frame-time meters
-`#frameTime` = **CPU** submit time via `performance.now()` (matches DevTools' main track);
-`#gpuTime` = **GPU** execution time via `EXT_disjoint_timer_query_webgl2` (async; `render()` wraps
-the pass loop in a query, `pollGpuQueries()` drains a small queue, `lastGpuTimeMs`). Both refresh
-every 200ms. Note: GPU time is the real cost for "will it hold 60fps"; CPU submit time is much lower
-because GPU work is async.
+Current `#meters`: `#frameDrops` (dropped-frame counter for the loaded media), `#gpuTime` =
+**GPU** execution time via `EXT_disjoint_timer_query_webgl2` (async; `render()` wraps the pass loop
+in a query, `pollGpuQueries()` drains a small queue, `lastGpuTimeMs`), `#fps`, plus per-frame
+sparklines `#gpuGraph`/`#fpsGraph`. A **Fast debug** toggle updates the readouts + graphs every
+frame (instantaneous, 0-based charts vs the 16.66ms / 60fps targets) instead of the 200ms average.
+The rAF loop is capped to ~60fps (`MIN_RENDER_MS`) so a 120Hz display doesn't run the full chain
+twice as often. GPU time is the real "will it hold 60fps" cost. (The old `#frameTime` **CPU** submit
+meter was removed — it was always far below GPU time and crowded the bar into overflow.)
+
+### Render-ahead output queue (rVFC) — attempted & reverted
+**Problem:** video at input-lines 480 (interlaced) visibly judders even though Chrome reports a
+steady 60fps and neither CPU nor GPU time spikes. Diagnosis: sampling the `<video>` on the rAF clock
+advances the decoded frame irregularly vs the canvas, and crt-royale flips the interlace field on
+every `FrameCount` (so the chain must run 60×/s with `FrameCount++` to keep the 60Hz A/B cadence).
+**Attempt:** a `requestVideoFrameCallback` *producer* rendered the chain into a ring of offscreen
+canvas-sized output textures (rate-converting to the right number of interlace fields per decoded
+frame), and a 60fps rAF *consumer* presented one queued frame per tick via a passthrough blit, with
+a 2-frame pre-roll — deliberately decoupling video fps from canvas fps. Gated behind a "Render-ahead"
+toggle, with a legacy direct-render fallback. **Reverted:** it was *choppier* than the simple
+rAF `drawImage(video)` + `render()` path — even with the toggle **off** (the consumer/queue/offscreen
++ present-blit machinery and added latency hurt more than the cadence smoothing helped). Rolled back
+to the pre-render-ahead state (`runtime.render()` draws the last pass straight to the canvas; no
+`uploadSource`/`ensureOutputPool`/`present`). If revisited, profile the present-blit + queue latency
+first; the simpler "rVFC updates the source texture, rAF still renders 60fps" variant was never tried.
 
 ### Bloom-disable — attempted & reverted
 Pruning crt-royale's bloom sub-chain (passes 8/9/10, repointing the geometry pass to MASKED_SCANLINES)
@@ -354,8 +373,8 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
 - **Per-parameter sliders** from `#pragma parameter` (name/desc/min/max/step/default),
   each with a borderless **↺ reset** to default (preset override value if any, else
   pragma initial).
-- **Meters** (`#meters`, right of `#status`, refresh 200ms): `#frameTime` CPU submit ms
-  (`performance.now()`), `#gpuTime` GPU ms (`EXT_disjoint_timer_query`), `#fps`. fps reads `0` when
+- **Meters** (`#meters`, right of `#status`, refresh 200ms): `#frameDrops` dropped-frame count,
+  `#gpuTime` GPU ms (`EXT_disjoint_timer_query`), `#fps`. fps reads `0` when
   idle in on-demand mode. See §5A. Two **live sparklines** (`#gpuGraph`/`#fpsGraph`, `drawSparkline()`
   in main.js) plot **unsmoothed per-frame** GPU time and instantaneous fps (1000/frame-interval) so
   jitter the 200ms averages hide is visible. GPU samples come from a new `runtime.gpuTimeHistory` ring
