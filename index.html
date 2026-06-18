@@ -16,6 +16,7 @@
   #fps { font: 12px monospace; color: #9f9; flex: none; }
   #frameDrops { font: 12px monospace; color: #f99; flex: none; }
   #gpuTime { font: 12px monospace; color: #c9f; flex: none; }
+  #rafGap { font: 12px monospace; color: #fc6; flex: none; }
   #meters { display: flex; gap: 12px; flex: none; align-items: center; }
   .meterGraph { width: 96px; height: 22px; background: #0d0e11; border: 1px solid #2a2d35; border-radius: 3px; vertical-align: middle; }
   canvas { max-width: 100%; max-height: 100%; image-rendering: auto; }
@@ -141,13 +142,13 @@
   <label title="Update meters and graphs every frame; chart GPU/FPS from 0 with target lines (more overhead)"><input type="checkbox" id="fastDebug"> Fast debug</label>
   <label title="Show the performance meters and graphs. Disabling removes the graph canvas elements (they can cause frame drops); meters are auto-disabled in fullscreen."><input type="checkbox" id="showMeters" checked> Meters</label>
   <label title="Fullscreen the bare canvas element (no overlaid controls — avoids compositing the video controls over the canvas). Off: fullscreen the view container so the player controls are reachable."><input type="checkbox" id="directFs" checked> Direct fullscreen</label>
-  <label title="Cap continuous rendering to this many frames per second (default 60). Lower it to reduce GPU load; raise it to render at the display's full refresh.">FPS limit: <input type="number" id="fpsLimit" min="1" value="60" style="width:56px"></label>
+  <label title="Cap continuous rendering to this many frames per second (default 60). The cap gates at the full target frame time (no early-render slack). Lower it to reduce GPU load.">FPS limit: <input type="number" id="fpsLimit" min="1" value="60" style="width:56px"></label>
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
   <button id="download">Download image</button>
   <button id="fullscreen">Fullscreen</button>
 </header>
-<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameDrops" title="Dropped frames since this media loaded (a frame interval roughly 2x the 60fps budget or longer)">0 dropped</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas></span></div>
+<div id="status"><span id="statusText">Loading…</span><span id="meters"><span id="frameDrops" title="Dropped frames since this media loaded (a frame interval roughly 2x the 60fps budget or longer)">0 dropped</span><span id="gpuTime" title="GPU execution time for the pass chain (EXT_disjoint_timer_query)"></span><canvas id="gpuGraph" class="meterGraph" width="96" height="22" title="Per-frame GPU time (unsmoothed)"></canvas><span id="fps">– fps</span><canvas id="fpsGraph" class="meterGraph" width="96" height="22" title="Per-frame FPS (unsmoothed)"></canvas><span id="rafGap" title="requestAnimationFrame cadence: gap between rAF callbacks (last / worst in window). On a 60Hz display this should sit at ~16.7ms; spikes are frame-pacing stutter, independent of GPU/work time.">raf</span><canvas id="rafGraph" class="meterGraph" width="96" height="22" title="Per-frame rAF interval (ms) vs the vsync target — spikes = pacing stutter"></canvas></span></div>
 <div id="content">
   <div id="view"><div id="canvasWrap"><canvas id="canvas" width="1920" height="1080"></canvas></div><button id="showControls">Show controls</button>
     <div id="vid">
