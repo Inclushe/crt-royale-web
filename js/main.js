@@ -67,6 +67,7 @@ const ui = {
   onDemand: document.getElementById('onDemand'),
   halation: document.getElementById('halation'),
   fastDebug: document.getElementById('fastDebug'),
+  showMeters: document.getElementById('showMeters'),
   actualSize: document.getElementById('actualSize'),
   download: document.getElementById('download'),
   fullscreen: document.getElementById('fullscreen'),
@@ -190,6 +191,26 @@ function onDemandEnabled() { return ui.onDemand ? ui.onDemand.checked : true; }
 function glowEnabled() { return ui.halation ? ui.halation.checked : true; }
 // Fast debug mode: refresh meters/graphs every rendered frame and chart from a 0 baseline.
 function debugEnabled() { return ui.fastDebug ? ui.fastDebug.checked : false; }
+// Performance meters/graphs are disabled via the toggle or while in fullscreen (the canvas
+// graph redraws are costly, and the meters aren't visible over the fullscreen canvas anyway).
+function metersOn() {
+  if (document.body.classList.contains('fs')) return false;
+  return ui.showMeters ? ui.showMeters.checked : true;
+}
+// Show/hide the meter readouts and detach/re-attach the two graph <canvas> elements,
+// removing them from the DOM entirely when off so they cost nothing.
+function applyMetersVisibility() {
+  const on = metersOn();
+  const meters = ui.fps.parentNode; // #meters
+  for (const el of [ui.frameDrops, ui.gpuTime, ui.fps]) el.style.display = on ? '' : 'none';
+  if (on) {
+    if (!ui.gpuGraph.isConnected) meters.insertBefore(ui.gpuGraph, ui.fps);
+    if (!ui.fpsGraph.isConnected) meters.appendChild(ui.fpsGraph);
+  } else {
+    ui.gpuGraph.remove();
+    ui.fpsGraph.remove();
+  }
+}
 
 // Push parameters to the runtime, applying the glow (halation/diffusion) toggle,
 // and request a render.
@@ -778,20 +799,23 @@ function frame(now) {
     lastFrameTs = null; // don't count the idle gap as one slow frame on resume
   }
   // Fast debug mode refreshes every rendered frame (instantaneous values); otherwise the
-  // readouts are averaged over METER_INTERVAL_MS.
-  if (debugEnabled() || now - fpsLast >= METER_INTERVAL_MS) {
-    ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
-    if (fpsFrames > 0) {
-      const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
-      ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
-    }
-    if (debugEnabled()) {
-      // Chart from 0 with the per-frame budget / 60fps drawn as the target line.
-      drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: TARGET_FRAME_MS, floor: 0 });
-      drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60, floor: 0 });
-    } else {
-      drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
-      drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
+  // readouts are averaged over METER_INTERVAL_MS. All readout/graph work is skipped when
+  // the meters are disabled (toggle off or fullscreen) — the canvas graph redraws are costly.
+  if ((metersOn() && debugEnabled()) || now - fpsLast >= METER_INTERVAL_MS) {
+    if (metersOn()) {
+      ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsLast))} fps`;
+      if (fpsFrames > 0) {
+        const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
+        ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
+      }
+      if (debugEnabled()) {
+        // Chart from 0 with the per-frame budget / 60fps drawn as the target line.
+        drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: TARGET_FRAME_MS, floor: 0 });
+        drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60, floor: 0 });
+      } else {
+        drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
+        drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
+      }
     }
     fpsFrames = 0;
     fpsLast = now;
@@ -867,6 +891,8 @@ async function init() {
     ui.onDemand.addEventListener('change', requestRender);
     ui.halation.addEventListener('change', applyParams);
     ui.fastDebug.addEventListener('change', requestRender);
+    ui.showMeters.addEventListener('change', applyMetersVisibility);
+    applyMetersVisibility(); // sync initial DOM state to the toggle
     ui.actualSize.addEventListener('change', applyActualSize);
     window.addEventListener('resize', () => {
       // The viewport-fill window is sized from #view; re-derive it on resize.
@@ -894,11 +920,13 @@ async function init() {
     };
     const enterFs = () => {
       document.body.classList.add('fs');
+      applyMetersVisibility(); // tear down the graphs/meters for fullscreen
       if (ui.actualSize.checked) applyActualSize();
       flashControls();
     };
     const exitFs = () => {
       document.body.classList.remove('fs');
+      applyMetersVisibility(); // restore the meters (if the toggle is on)
       clearTimeout(hideTimer);
       if (ui.actualSize.checked) applyActualSize();
     };
