@@ -271,6 +271,25 @@ Toggling rebuilds the preset (cached sources → fast). State in
 `state.advanced.interlaceDetect`. If you add more hot patches, mirror this pattern
 (`buildAdvancedUI`, `hasInterlacePass` flag, rebuild on change).
 
+### Manual interlace field (decouple the field flip from the clock)
+
+The same **Advanced** section also exposes **Freeze interlace field** and **Swap every N
+renders**. crt-royale's vertical-interlacing pass chooses the field with
+`fmod(FrameCount + interlace_bff, 2.0)`, and `FrameCount` is just the render counter
+(`runtime.frameCount`, `++` once per `render()`). In 480i video playback that welds the field
+parity to the rAF clock, which beats against the video's frame timing → a visible "interlace
+skips a frame" hitch *even at a steady 60fps*. These controls drive the field from a value we
+set instead: the runtime has `frameCountOverride` (null = legacy counter); the FrameCount
+getter returns the override when non-null (still honoring `frame_count_mod`). `frame()` sets
+`runtime.frameCountOverride = isVideo ? interlaceFieldOverride() : null` each rendered frame.
+`interlaceFieldOverride()` = `fieldFrozenValue` when frozen, else
+`Math.floor(runtime.frameCount / swapEveryN)` (and `null` when `swapEveryN === 1`, so the
+default is byte-for-byte legacy). State in `state.advanced.freezeField` /
+`state.advanced.swapEveryN`, with `state.fieldFrozenValue` captured on freeze. **Caveat:** the
+override replaces `FrameCount` for *all* passes that read it — in crt-royale that's effectively
+just the interlace field select, and it only diverges from legacy for video with non-default
+controls, but keep it in mind for other FrameCount-using presets.
+
 ---
 
 ## 7. Testing

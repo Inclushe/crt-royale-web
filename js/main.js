@@ -126,7 +126,8 @@ const state = {
   media: null, // { source, width, height, isVideo }
   running: false,
   needsRender: true, // on-demand: render the next frame (start dirty)
-  advanced: { interlaceDetect: true },
+  advanced: { interlaceDetect: true, freezeField: false, swapEveryN: 1 },
+  fieldFrozenValue: 0, // FrameCount captured when the interlace field is frozen
   lutCache: new Map(),     // resolved URL -> Promise<ImageBitmap> (decoded LUT/mask)
   crtRoyaleWarmed: false,  // whether the crt-royale family has been prewarmed
   frameDrops: 0,           // dropped frames since the current media loaded
@@ -190,6 +191,13 @@ function prewarmCrtRoyale() {
 function requestRender() { state.needsRender = true; }
 function onDemandEnabled() { return ui.onDemand ? ui.onDemand.checked : true; }
 function glowEnabled() { return ui.halation ? ui.halation.checked : true; }
+// Manual interlace field: decouple crt-royale's field flip from the render/video clock.
+// Freeze -> hold a constant field; else swap once every N renders (N=1 == legacy FrameCount).
+function interlaceFieldOverride() {
+  if (state.advanced.freezeField) return state.fieldFrozenValue;
+  const n = Math.max(1, state.advanced.swapEveryN | 0);
+  return n === 1 ? null : Math.floor(state.runtime.frameCount / n);
+}
 // Fast debug mode: refresh meters/graphs every rendered frame and chart from a 0 baseline.
 function debugEnabled() { return ui.fastDebug ? ui.fastDebug.checked : false; }
 // Performance meters/graphs are disabled via the toggle or while in fullscreen (the canvas
@@ -594,6 +602,36 @@ function buildAdvancedUI(hasInterlacePass) {
   label.append(cb, document.createTextNode(' Interlace detect (crt-royale)'));
   div.append(label);
   ui.advanced.append(h, div);
+
+  // Manual interlace field: drive the field flip from a value we set, not the render
+  // clock. Freeze holds a constant field; "Swap every N renders" sets the flip cadence.
+  const fieldDiv = document.createElement('div');
+  fieldDiv.className = 'param';
+  const freezeLabel = document.createElement('label');
+  const freezeCb = document.createElement('input');
+  freezeCb.type = 'checkbox';
+  freezeCb.checked = state.advanced.freezeField;
+  freezeCb.addEventListener('change', () => {
+    state.advanced.freezeField = freezeCb.checked;
+    if (freezeCb.checked) state.fieldFrozenValue = state.runtime ? state.runtime.frameCount : 0;
+  });
+  freezeLabel.append(freezeCb, document.createTextNode(' Freeze interlace field'));
+
+  const swapLabel = document.createElement('label');
+  swapLabel.title = 'Flip the interlace field once every N rendered frames (1 = every frame, the default).';
+  const swapInput = document.createElement('input');
+  swapInput.type = 'number';
+  swapInput.min = '1';
+  swapInput.value = String(state.advanced.swapEveryN);
+  swapInput.style.width = '52px';
+  swapInput.addEventListener('change', () => {
+    state.advanced.swapEveryN = Math.max(1, parseInt(swapInput.value, 10) || 1);
+    swapInput.value = String(state.advanced.swapEveryN);
+  });
+  swapLabel.append(document.createTextNode('Swap every '), swapInput, document.createTextNode(' renders'));
+
+  fieldDiv.append(freezeLabel, document.createElement('br'), swapLabel);
+  ui.advanced.append(fieldDiv);
 }
 
 function fmtTime(t) {
@@ -768,6 +806,7 @@ function frame(now) {
   if (shouldRender) {
     lastRenderTs = now;
     try {
+      state.runtime.frameCountOverride = isVideo ? interlaceFieldOverride() : null;
       if (isVideo) drawFeed();
       state.runtime.render();
     } catch (e) {

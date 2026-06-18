@@ -55,6 +55,9 @@ export class CrtRuntime {
     this.programCache = new Map();
     this.luts = new Map();
     this.frameCount = 0;
+    // When non-null, main.js drives the FrameCount uniform manually (decouples the
+    // crt-royale interlace field flip from the render counter). null = legacy counter.
+    this.frameCountOverride = null;
     this.paramValues = {};
     this.original = null; // { source, width, height, dynamic, textures[], index, texture }
     this.flipY = false;
@@ -461,7 +464,10 @@ export class CrtRuntime {
     if (name === 'FrameCount') {
       return {
         kind: 'int',
-        get: () => p.meta.frameCountMod ? this.frameCount % p.meta.frameCountMod : this.frameCount,
+        get: () => {
+          const fc = this.frameCountOverride != null ? this.frameCountOverride : this.frameCount;
+          return p.meta.frameCountMod ? fc % p.meta.frameCountMod : fc;
+        },
       };
     }
     if (name === 'FrameDirection') return { kind: 'int', get: () => 1 };
