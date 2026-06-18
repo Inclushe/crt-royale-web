@@ -904,7 +904,7 @@ async function init() {
     };
     ui.fullscreen.addEventListener('click', () => {
       if (document.fullscreenElement) document.exitFullscreen();
-      else document.documentElement.requestFullscreen?.().catch(() => {});
+      else ui.canvas.requestFullscreen?.().catch(() => {});
       // Toggle the controls-hidden layout regardless of native fullscreen support.
       if (document.body.classList.contains('fs')) exitFs(); else enterFs();
     });

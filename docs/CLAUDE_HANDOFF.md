@@ -368,8 +368,11 @@ unit-reasoned); the most recent "Advanced at top + interlace default ON" change
   **Halation** (default ON; off zeroes `halation_weight`+`diffusion_weight`), **Reload shader**
   (clears source cache), **Reset params**, **Download image** (PNG `<preset>-<w>x<h>.png`, current
   buffer — in Mini-TV this is the small windowed crop), **Fullscreen**.
-- **Fullscreen:** hides header/status/params (`body.fs`), requests native fullscreen;
-  "Show controls" button fades after 2.5s idle, reappears on pointer move.
+- **Fullscreen:** requests native fullscreen on the **`<canvas>` element only**
+  (`canvas:fullscreen` CSS fits it to the screen with `object-fit: contain` + black bars;
+  Esc exits). Still toggles `body.fs` (hides header/status/params) as the no-native-FS
+  fallback. NOTE: video transport / "Show controls" are not reachable over the fullscreen
+  canvas yet (deferred).
 - **Per-parameter sliders** from `#pragma parameter` (name/desc/min/max/step/default),
   each with a borderless **↺ reset** to default (preset override value if any, else
   pragma initial).
