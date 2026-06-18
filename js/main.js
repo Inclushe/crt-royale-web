@@ -72,7 +72,6 @@ const ui = {
   download: document.getElementById('download'),
   fullscreen: document.getElementById('fullscreen'),
   directFs: document.getElementById('directFs'),
-  fpsLimit: document.getElementById('fpsLimit'),
   showControls: document.getElementById('showControls'),
   view: document.getElementById('view'),
   canvasWrap: document.getElementById('canvasWrap'),
@@ -736,19 +735,15 @@ const GRAPH_CAP = 180;
 const fpsHistory = [];
 let lastFrameTs = null;
 
-// Cap continuous rendering to a target fps (the #fpsLimit input, default 60). Some
-// browsers run rAF at 120Hz; running the full pass chain that often over-subscribes the
-// GPU and makes frame time hitch to 2x.
-function targetFps() {
-  const v = ui.fpsLimit ? parseInt(ui.fpsLimit.value, 10) : 60;
-  return v > 0 ? v : 60;
-}
-function targetFrameMs() { return 1000 / targetFps(); } // one slot at the target fps
+// Cap continuous rendering to ~60fps. Some browsers run rAF at 120Hz; running the
+// full pass chain that often over-subscribes the GPU and makes frame time hitch to 2x.
+const TARGET_FPS = 60;
+const TARGET_FRAME_MS = 1000 / TARGET_FPS; // 16.67 ms — one 60fps slot
 // Minimum wall-clock gap between renders. The ~4ms slack (≈ half a 120Hz tick) absorbs
 // rAF jitter so a 120Hz display renders every OTHER tick cleanly (no beating), while a
 // 60Hz display still renders every tick. This is an upper bound only — NOT a v-sync lock
 // (we never read the video's frame rate or snap the cadence to it).
-function minRenderMs() { return targetFrameMs() - 4; }
+const MIN_RENDER_MS = TARGET_FRAME_MS - 4; // ~12.67 ms
 let lastRenderTs = 0;
 
 // Draw a min/max-autoscaled sparkline of `data` into a small canvas, plus a faint
@@ -801,7 +796,7 @@ function frame(now) {
   const isVideo = state.media.isVideo;
   const continuous = isVideo || !onDemandEnabled();
   const shouldRender = continuous || state.needsRender;
-  if (continuous && !state.needsRender && now - lastRenderTs < minRenderMs()) {
+  if (continuous && !state.needsRender && now - lastRenderTs < MIN_RENDER_MS) {
     // 60fps cap: too soon since the last continuous frame. Skip the render but keep
     // draining the GPU timer queue so it never wedges. Leave lastFrameTs alone so the
     // next render's interval stays a true render-to-render gap.
@@ -830,7 +825,7 @@ function frame(now) {
         if (fpsHistory.length > GRAPH_CAP) fpsHistory.shift();
         // A dropped frame: the interval spans more than one 60fps slot. Count the
         // missed slots (a ~33ms gap = 1, ~50ms = 2, …). A steady ~16.7ms never counts.
-        const missed = Math.round(dt / targetFrameMs()) - 1;
+        const missed = Math.round(dt / TARGET_FRAME_MS) - 1;
         if (missed > 0) {
           state.frameDrops += missed;
           ui.frameDrops.textContent = `${state.frameDrops} dropped`;
@@ -855,11 +850,11 @@ function frame(now) {
       }
       if (debugEnabled()) {
         // Chart from 0 with the per-frame budget / 60fps drawn as the target line.
-        drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: targetFrameMs(), floor: 0 });
-        drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: targetFps(), floor: 0 });
+        drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: TARGET_FRAME_MS, floor: 0 });
+        drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60, floor: 0 });
       } else {
         drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
-        drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: targetFps() });
+        drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: 60 });
       }
     }
     fpsFrames = 0;

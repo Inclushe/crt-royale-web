@@ -231,8 +231,8 @@ Current `#meters`: `#frameDrops` (dropped-frame counter for the loaded media), `
 in a query, `pollGpuQueries()` drains a small queue, `lastGpuTimeMs`), `#fps`, plus per-frame
 sparklines `#gpuGraph`/`#fpsGraph`. A **Fast debug** toggle updates the readouts + graphs every
 frame (instantaneous, 0-based charts vs the 16.66ms / 60fps targets) instead of the 200ms average.
-The rAF loop is capped to the `#fpsLimit` input (default 60, via `targetFps()`/`minRenderMs()`)
-so a 120Hz display doesn't run the full chain twice as often. GPU time is the real "will it hold 60fps" cost. (The old `#frameTime` **CPU** submit
+The rAF loop is capped to ~60fps (`MIN_RENDER_MS`) so a 120Hz display doesn't run the full chain
+twice as often. GPU time is the real "will it hold 60fps" cost. (The old `#frameTime` **CPU** submit
 meter was removed — it was always far below GPU time and crowded the bar into overflow.)
 
 ### Render-ahead output queue (rVFC) — attempted & reverted
