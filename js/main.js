@@ -71,6 +71,7 @@ const ui = {
   actualSize: document.getElementById('actualSize'),
   download: document.getElementById('download'),
   fullscreen: document.getElementById('fullscreen'),
+  directFs: document.getElementById('directFs'),
   showControls: document.getElementById('showControls'),
   view: document.getElementById('view'),
   canvasWrap: document.getElementById('canvasWrap'),
@@ -932,7 +933,9 @@ async function init() {
     };
     ui.fullscreen.addEventListener('click', () => {
       if (document.fullscreenElement) document.exitFullscreen();
-      else ui.canvas.requestFullscreen?.().catch(() => {});
+      // Direct mode: fullscreen the bare <canvas> (no controls composited over it).
+      // Off: fullscreen the #view container so the player controls stay reachable.
+      else (ui.directFs.checked ? ui.canvas : ui.view).requestFullscreen?.().catch(() => {});
       // Toggle the controls-hidden layout regardless of native fullscreen support.
       if (document.body.classList.contains('fs')) exitFs(); else enterFs();
     });
