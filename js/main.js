@@ -90,8 +90,6 @@ const ui = {
   gpuTime: document.getElementById('gpuTime'),
   gpuGraph: document.getElementById('gpuGraph'),
   fpsGraph: document.getElementById('fpsGraph'),
-  rafGap: document.getElementById('rafGap'),
-  rafGraph: document.getElementById('rafGraph'),
 };
 
 function status(msg) {
@@ -214,15 +212,13 @@ function metersOn() {
 function applyMetersVisibility() {
   const on = metersOn();
   const meters = ui.fps.parentNode; // #meters
-  for (const el of [ui.frameDrops, ui.gpuTime, ui.fps, ui.rafGap]) el.style.display = on ? '' : 'none';
+  for (const el of [ui.frameDrops, ui.gpuTime, ui.fps]) el.style.display = on ? '' : 'none';
   if (on) {
     if (!ui.gpuGraph.isConnected) meters.insertBefore(ui.gpuGraph, ui.fps);
     if (!ui.fpsGraph.isConnected) meters.appendChild(ui.fpsGraph);
-    if (!ui.rafGraph.isConnected) meters.appendChild(ui.rafGraph);
   } else {
     ui.gpuGraph.remove();
     ui.fpsGraph.remove();
-    ui.rafGraph.remove();
   }
 }
 
@@ -740,24 +736,20 @@ const GRAPH_CAP = 180;
 const fpsHistory = [];
 let lastFrameTs = null;
 
-// Cap continuous rendering to a target fps (the #fpsLimit input, default 60). Some browsers
-// run rAF at 120Hz; running the full pass chain that often over-subscribes the GPU. The cap
-// gates at the full target frame time (a render is skipped only if less than one whole slot
-// has elapsed) — no early-render slack. Also sets the graph target line / dropped-frame base.
+// Cap continuous rendering to a target fps (the #fpsLimit input, default 60). Some
+// browsers run rAF at 120Hz; running the full pass chain that often over-subscribes the
+// GPU and makes frame time hitch to 2x.
 function targetFps() {
   const v = ui.fpsLimit ? parseInt(ui.fpsLimit.value, 10) : 60;
   return v > 0 ? v : 60;
 }
 function targetFrameMs() { return 1000 / targetFps(); } // one slot at the target fps
+// Minimum wall-clock gap between renders. The ~4ms slack (≈ half a 120Hz tick) absorbs
+// rAF jitter so a 120Hz display renders every OTHER tick cleanly (no beating), while a
+// 60Hz display still renders every tick. This is an upper bound only — NOT a v-sync lock
+// (we never read the video's frame rate or snap the cadence to it).
+function minRenderMs() { return targetFrameMs() - 4; }
 let lastRenderTs = 0;
-
-// Frame-pacing instrumentation: the rAF cadence — the gap between consecutive rAF
-// callbacks (now - lastRafNow) — sampled every frame at the very top of frame(), before any
-// work. A microstutter (e.g. a 17.2ms gap on a 60Hz/16.67ms display) shows up here as a
-// spike vs the vsync target even when GPU/work time is low, localizing it to rAF/present
-// delivery rather than the renderer. Charted in the meters next to gpu/fps.
-let lastRafNow = 0;
-const rafGapHistory = [];
 
 // Draw a min/max-autoscaled sparkline of `data` into a small canvas, plus a faint
 // marker line at `target` (e.g. 60 fps / a budget) so spikes read against a baseline.
@@ -802,24 +794,17 @@ function drawSparkline(canvas, data, color, { target, floor } = {}) {
 
 function frame(now) {
   if (state.running) requestAnimationFrame(frame); // re-arm first (now = rAF timestamp)
-  // Pacing: sample the true rAF cadence first, before any early return or render, so the
-  // gap reflects pure vsync delivery (not where in the function we measured).
-  if (lastRafNow) {
-    rafGapHistory.push(now - lastRafNow);
-    if (rafGapHistory.length > GRAPH_CAP) rafGapHistory.shift();
-  }
-  lastRafNow = now;
   if (!(state.runtime && state.media)) return;
   // On-demand: video (and non-on-demand mode) render continuously; a static image only
-  // when marked dirty. The continuous path is capped to the target fps; one-shot renders (a
-  // real change, needsRender) bypass the cap so param/UI changes stay instant.
+  // when marked dirty. The continuous path is capped to ~60fps; one-shot renders (a real
+  // change, needsRender) bypass the cap so param/UI changes stay instant.
   const isVideo = state.media.isVideo;
   const continuous = isVideo || !onDemandEnabled();
   const shouldRender = continuous || state.needsRender;
-  if (continuous && !state.needsRender && now - lastRenderTs < targetFrameMs()) {
-    // fps cap: too soon since the last continuous frame. Skip the render but keep draining
-    // the GPU timer queue so it never wedges. Leave lastFrameTs alone so the next render's
-    // interval stays a true render-to-render gap.
+  if (continuous && !state.needsRender && now - lastRenderTs < minRenderMs()) {
+    // 60fps cap: too soon since the last continuous frame. Skip the render but keep
+    // draining the GPU timer queue so it never wedges. Leave lastFrameTs alone so the
+    // next render's interval stays a true render-to-render gap.
     state.runtime.pollGpuQueries();
     return;
   }
@@ -868,21 +853,13 @@ function frame(now) {
         const gpu = state.runtime.lastGpuTimeMs; // async GPU execution time
         ui.gpuTime.textContent = gpu != null ? `gpu ${gpu.toFixed(2)} ms` : '';
       }
-      // rAF cadence: last interval and the worst interval in the window (spikes = stutter).
-      if (rafGapHistory.length) {
-        const last = rafGapHistory[rafGapHistory.length - 1];
-        let mx = 0; for (const v of rafGapHistory) if (v > mx) mx = v;
-        ui.rafGap.textContent = `raf ${last.toFixed(1)}/${mx.toFixed(1)} ms`;
-      }
       if (debugEnabled()) {
-        // Chart from 0 with the per-frame budget / target fps drawn as the target line.
+        // Chart from 0 with the per-frame budget / 60fps drawn as the target line.
         drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f', { target: targetFrameMs(), floor: 0 });
         drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: targetFps(), floor: 0 });
-        drawSparkline(ui.rafGraph, rafGapHistory, '#fc6', { target: targetFrameMs(), floor: 0 });
       } else {
         drawSparkline(ui.gpuGraph, state.runtime.gpuTimeHistory, '#c9f');
         drawSparkline(ui.fpsGraph, fpsHistory, '#9f9', { target: targetFps() });
-        drawSparkline(ui.rafGraph, rafGapHistory, '#fc6', { target: targetFrameMs() });
       }
     }
     fpsFrames = 0;

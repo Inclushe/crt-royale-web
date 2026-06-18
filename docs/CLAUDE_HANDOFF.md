@@ -229,17 +229,11 @@ Video always renders. `pollGpuQueries()` is still drained every tick while idle.
 Current `#meters`: `#frameDrops` (dropped-frame counter for the loaded media), `#gpuTime` =
 **GPU** execution time via `EXT_disjoint_timer_query_webgl2` (async; `render()` wraps the pass loop
 in a query, `pollGpuQueries()` drains a small queue, `lastGpuTimeMs`), `#fps`, plus per-frame
-sparklines `#gpuGraph`/`#fpsGraph`/`#rafGap`+`#rafGraph`. A **Fast debug** toggle updates the
-readouts + graphs every frame (instantaneous, 0-based charts vs the target-fps lines) instead of
-the 200ms average. The rAF loop is capped to the `#fpsLimit` input (default 60, via `targetFps()`):
-a continuous render is skipped only if less than one whole target frame slot has elapsed since the
-last (`now - lastRenderTs < targetFrameMs()`) — the old `targetFrameMs() - 4` early-render slack
-was removed. The `#rafGap`/`#rafGraph` meter charts the
-**rAF cadence** (gap between rAF callbacks, sampled at the top of `frame()` every tick into
-`rafGapHistory`) — a microstutter shows up here as a spike vs the vsync target even when GPU/work
-is low, localizing it to rAF/present delivery vs the renderer. GPU time is the real "will it hold
-60fps" cost. (The old `#frameTime` **CPU** submit meter was removed — it was always far below GPU
-time and crowded the bar into overflow.)
+sparklines `#gpuGraph`/`#fpsGraph`. A **Fast debug** toggle updates the readouts + graphs every
+frame (instantaneous, 0-based charts vs the 16.66ms / 60fps targets) instead of the 200ms average.
+The rAF loop is capped to the `#fpsLimit` input (default 60, via `targetFps()`/`minRenderMs()`)
+so a 120Hz display doesn't run the full chain twice as often. GPU time is the real "will it hold 60fps" cost. (The old `#frameTime` **CPU** submit
+meter was removed — it was always far below GPU time and crowded the bar into overflow.)
 
 ### Render-ahead output queue (rVFC) — attempted & reverted
 **Problem:** video at input-lines 480 (interlaced) visibly judders even though Chrome reports a
