@@ -15,6 +15,10 @@ const code = await withApp(async ({ browser, url }) => {
   await uploadPng(page, png);
   await page.waitForTimeout(800);
 
+  // Meters now default off; the fps readout only updates when they're on. Enable them so
+  // the idle-fps assertion below can read #fps.
+  await page.evaluate(() => { const c = document.getElementById('showMeters'); if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); } });
+
   const fc = () => page.evaluate(() => window.__crt.runtime.frameCount);
 
   // On-demand ON (default): should go idle.

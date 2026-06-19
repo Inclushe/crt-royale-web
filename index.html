@@ -75,10 +75,10 @@
     <option value="custom">Custom…</option>
   </select><input type="text" id="inputLinesCustom" size="4" placeholder="e.g. 240" style="display:none"></label>
   <label title="Horizontal input resolution = source detail. Higher removes blockiness; does not change the triad count.">Horizontal: <select id="inputWidth">
-    <option value="source" selected>Source</option>
+    <option value="source">Source</option>
     <option value="256">256 (NES/SNES)</option>
     <option value="320">320 (Genesis/PS1)</option>
-    <option value="640">640 (480p)</option>
+    <option value="640" selected>640 (480p)</option>
     <option value="custom">Custom…</option>
   </select><input type="text" id="inputWidthCustom" size="4" placeholder="e.g. 320" style="display:none"></label>
   <label>Crop: <select id="crop">
@@ -95,13 +95,13 @@
     <option value="stretch">Stretch</option>
   </select></label>
   <label>Aspect: <select id="aspect">
-    <option value="4:3" selected>4:3</option>
+    <option value="4:3">4:3</option>
     <option value="16:9">16:9</option>
-    <option value="source">Match input</option>
+    <option value="source" selected>Match input</option>
   </select></label>
   <label>Output: <select id="resolution">
-    <option value="1920x1080" selected>1080p</option>
-    <option value="2560x1440">1440p</option>
+    <option value="1920x1080">1080p</option>
+    <option value="2560x1440" selected>1440p</option>
     <option value="3840x2160">4K</option>
     <option value="1280x720">720p</option>
   </select></label>
@@ -139,10 +139,10 @@
   <label title="Render only when something changes (static images); video always renders"><input type="checkbox" id="onDemand" checked> On-demand</label>
   <label title="Halation / diffusion glow (zeroes halation_weight &amp; diffusion_weight)"><input type="checkbox" id="halation" checked> Halation</label>
   <label title="Update meters and graphs every frame; chart GPU/FPS from 0 with target lines (more overhead)"><input type="checkbox" id="fastDebug"> Fast debug</label>
-  <label title="Show the performance meters and graphs. Disabling removes the graph canvas elements (they can cause frame drops); meters are auto-disabled in fullscreen."><input type="checkbox" id="showMeters" checked> Meters</label>
-  <label title="Fullscreen the bare canvas element (no overlaid controls — avoids compositing the video controls over the canvas). Off: fullscreen the view container so the player controls are reachable."><input type="checkbox" id="directFs" checked> Direct fullscreen</label>
+  <label title="Show the performance meters and graphs. Disabling removes the graph canvas elements (they can cause frame drops); meters are auto-disabled in fullscreen."><input type="checkbox" id="showMeters"> Meters</label>
+  <label title="Fullscreen the bare canvas element (no overlaid controls — avoids compositing the video controls over the canvas). Off: fullscreen the view container so the player controls are reachable."><input type="checkbox" id="directFs"> Direct fullscreen</label>
   <label title="Cap continuous rendering to this many frames per second (default 60). Lower it to reduce GPU load; raise it to render at the display's full refresh.">FPS limit: <input type="number" id="fpsLimit" min="1" value="60" style="width:52px"></label>
-  <label title="Render slack (ms, default 4). A render is skipped only if less than (one target slot − slack) has elapsed. The slack absorbs rAF jitter so a 120Hz display renders every other tick cleanly; set 0 to gate at the full slot.">Slack ms: <input type="number" id="renderSlack" min="0" step="0.5" value="4" style="width:52px"></label>
+  <label title="Render slack (ms, default 4). A render is skipped only if less than (one target slot − slack) has elapsed. The slack absorbs rAF jitter so a 120Hz display renders every other tick cleanly; set 0 to gate at the full slot.">Slack ms: <input type="number" id="renderSlack" min="0" step="0.5" value="1" style="width:52px"></label>
   <button id="reload">Reload shader</button>
   <button id="resetParams">Reset params</button>
   <button id="download">Download image</button>
