@@ -33,6 +33,9 @@
      scrolls so floating controls (#vid, #showControls) stay over the view */
   #view.actual #canvasWrap { overflow: auto; align-items: flex-start; justify-content: flex-start; }
   #view.actual canvas { max-width: none; max-height: none; margin: auto; }
+  /* mini-TV with the viewport-fill window: the canvas is sized to exactly fill #view, so
+     clip instead of scrolling (subpixel rounding must not spawn scrollbars) */
+  #view.actual.mini-viewport #canvasWrap { overflow: hidden; }
   @media (max-width: 800px) {
     #content { flex-direction: column; }
     #view { min-height: 45vh; }

@@ -507,6 +507,9 @@ function applyOutputSize() {
 // scrolls and starts centered.
 function applyActualSize() {
   const wrap = ui.canvasWrap;
+  // Mini-TV with the viewport-fill window sizes the canvas to exactly fill #view; clip
+  // (overflow:hidden) so subpixel rounding can't spawn scrollbars.
+  ui.view.classList.toggle('mini-viewport', miniEnabled() && ui.windowSize.value === 'viewport');
   if (ui.actualSize.checked) {
     ui.view.classList.add('actual');
     const dpr = window.devicePixelRatio || 1;
